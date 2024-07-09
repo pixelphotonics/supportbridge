@@ -21,6 +21,7 @@ pub async fn bridge(server: Uri, exposed: Uri) -> Result<()> {
     let task_1 = tokio::spawn(async move {
         while let Some(msg) = ws_server_in.next().await {
             let msg = msg.expect("Failed to get message");
+            log::debug!("server -> exposer: {} bytes", msg.len());
             ws_exposer_out.send(msg).await.expect("Failed to send to exposer");
         }
     });
@@ -28,6 +29,7 @@ pub async fn bridge(server: Uri, exposed: Uri) -> Result<()> {
     let task_2 = tokio::spawn(async move {
         while let Some(msg) = ws_exposer_in.next().await {
             let msg = msg.expect("Failed to get message");
+            log::debug!("exposer -> server: {} bytes", msg.len());
             ws_server_out.send(msg).await.expect("Failed to send to server");
         }
     });

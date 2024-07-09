@@ -75,7 +75,9 @@ async fn main() -> anyhow::Result<()> {
             expose::serve(bind, address).await?;
         },
         Command::Connect { bind, server_addr, name } => {
-            
+            use servicebridge::client;
+
+            client::serve(bind, server_addr).await?;
         },
         Command::Relay { exposed_addr, server_addr, name } => {
             use servicebridge::bridge;

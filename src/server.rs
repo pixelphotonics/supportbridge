@@ -149,6 +149,9 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
 
                 let task_2 = tokio::spawn(async move {
                     let mut server_write = server_write.lock().await;
+
+                    server_write.send(tungstenite::Message::Text("init".into())).await.expect("Failed to send 'init' to server");
+
                     while let Some(msg) = client_read.next().await {
                         let msg = msg.expect("Failed to get message");
                         server_write.send(msg).await.expect("Failed to send to server");

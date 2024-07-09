@@ -51,6 +51,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
 
                             // Create new socket connection
                             let new_socket = TcpStream::connect(target_addr).await.unwrap();
+                            debug!("Open socket to target: {}", target_addr);
                             let (mut target_read, target_write) = new_socket.into_split();
 
                             let (close_sender, mut close_receiver) = oneshot::channel();
@@ -61,6 +62,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
                             });
 
                             if let Some(old_connection) = old_connection {
+                                debug!("Close existing target port");
                                 old_connection.close_sender.send(()).expect("Failed to send close signal");
                             }
 
@@ -99,6 +101,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
                 } else if msg.is_binary() {
                     // forward to open socket, if any
                     if let Some(socket) = target_socket.lock().await.as_mut() {
+                        log::debug!("Forwarding message to target, {} bytes", msg.len());
                         socket.write_half.write(&msg.into_data()).await.expect("Failed to write to target");
                     }
                 }
