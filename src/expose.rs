@@ -8,14 +8,6 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 
-pub struct Client {
-    pub target_addr: core::net::SocketAddr,
-    pub listen_addr: core::net::SocketAddr,
-
-    pub target_socket: Option<TcpStream>,
-    pub listen_socket: Option<TcpStream>,
-}
-
 pub struct ClientConnection {
     pub write_half: tokio::net::tcp::OwnedWriteHalf,
     pub close_sender: oneshot::Sender<()>,
@@ -63,7 +55,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
 
                             if let Some(old_connection) = old_connection {
                                 debug!("Close existing target port");
-                                old_connection.close_sender.send(()).expect("Failed to send close signal");
+                                _ = old_connection.close_sender.send(());
                             }
 
                             let wssender = ws_send_sender.clone();
@@ -113,10 +105,10 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
 }
 
 pub async fn serve(bind: SocketAddr, tcp_addr: SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(bind).await.expect("Can't listen");
+    let listener = TcpListener::bind(bind).await?;
 
     while let Ok((stream, _)) = listener.accept().await {
-        let peer = stream.peer_addr().expect("connected streams should have a peer address");
+        let peer = stream.peer_addr()?;
         info!("Peer address: {}", peer);
 
         tokio::spawn(handle_connection(stream, tcp_addr));
