@@ -10,6 +10,6 @@ env_logger = "0.11.3"
 futures = "0.3.30"
 log = "0.4.22"
 serde = { version="1.0.204", features=["std", "derive"] }
-tokio = { version = "1.38.0", features = ["rt", "sync", "macros"] }
+tokio = { version = "1.38.0", features = ["rt", "sync", "macros", "rt-multi-thread"] }
 tokio-tungstenite = "0.23.1"
 tungstenite = "0.23.0"
