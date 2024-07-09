@@ -1,0 +1,15 @@
+[package]
+name = "servicebridge"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+clap = { version = "4.5", features = ["derive"] }
+env_logger = "0.11.3"
+futures = "0.3.30"
+log = "0.4.22"
+serde = { version="1.0.204", features=["std", "derive"] }
+tokio = { version = "1.38.0", features = ["rt", "sync", "macros"] }
+tokio-tungstenite = "0.23.1"
+tungstenite = "0.23.0"
