@@ -1,20 +1,12 @@
 use std::collections::HashMap;
-use std::hash::Hash;
 use anyhow::Result;
-use tungstenite::handshake::server;
 use tungstenite::http::Uri;
 use std::sync::Arc;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use log::{debug, info};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::oneshot;
 
-
-pub struct ServerConfig {
-    pub listen_addr: core::net::SocketAddr,
-}
 
 pub struct TunnelServer {
     pub channels: HashMap<String, Channel>,
@@ -50,6 +42,7 @@ enum ServerPath {
     Connect {
         name: String,
     },
+    List,
 }
 
 impl ServerPath {
@@ -71,6 +64,9 @@ impl ServerPath {
                 Ok(ServerPath::Connect {
                     name: name.clone(),
                 })
+            },
+            "/list" => {
+                Ok(ServerPath::List)
             },
             _ => Err(anyhow::anyhow!("Unknown path: {}", path)),
         }
@@ -164,15 +160,18 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                 ws_stream.close(None).await?;
             }
         },
+        ServerPath::List => {
+            //ws_stream.send(tungstenite::Message::Text())
+        },
     }
 
     Ok(())
     
 }
 
-pub async fn serve(config: ServerConfig) -> Result<()> {
-    let listener = TcpListener::bind(config.listen_addr).await.expect("Can't listen");
-    info!("Listening on {}", config.listen_addr);
+pub async fn serve(listen_addr: core::net::SocketAddr) -> Result<()> {
+    let listener = TcpListener::bind(listen_addr).await.expect("Can't listen");
+    info!("Listening on {}", listen_addr);
 
     let server  = Arc::new(Mutex::new(TunnelServer {
         channels: HashMap::new(),

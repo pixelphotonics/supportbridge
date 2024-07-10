@@ -76,7 +76,7 @@ pub async fn serve(tcp_bind: SocketAddr, ws_server: Uri) -> Result<()> {
         tokio::spawn(async move {
             match handle_connection(stream, ws_server_clone).await {
                 Ok(_) => {
-                    log::debug!("Connection closed");
+                    log::info!("Connection closed: {}", peer);
                 },
                 Err(e) => {
                     log::error!("Connection error: {:?}", e);

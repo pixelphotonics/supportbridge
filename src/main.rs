@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use tungstenite::http::Uri;
 use std::net::SocketAddr;
+use servicebridge::{server, util};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -16,28 +17,28 @@ enum Command {
     /// Run the central (public) server
     Serve {
         /// The Ip address:port combination to listen on.
-        #[clap(long, default_value = "[::]:8080")]
+        #[clap(long, default_value = "[::]:8081")]
         bind: SocketAddr,
     },
 
     /// Run the websocket-to-TCP bridge
     Expose {
         /// The Ip address:port combination to listen on.
-        #[clap(long, default_value = "[::]:8080")]
+        #[clap(long, default_value = "[::]:8082")]
         bind: SocketAddr,
 
-        /// The address of the TCP server to connect to
-        address: SocketAddr,
+        /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        address: String,
     },
 
     /// Connect to a server and bind a local TCP port.
     Connect {
         /// The Ip address:port combination to listen on.
-        #[clap(long, default_value = "[::]:8080")]
+        #[clap(long, default_value = "[::]:8083")]
         bind: SocketAddr,
 
-        /// The address of the central server to connect to
-        server_addr: Uri,
+        /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        server_addr: String,
 
         /// Name of the exposed machine
         name: String,
@@ -45,8 +46,11 @@ enum Command {
 
     /// Connect an exposed websocket-to-TCP bridge with a server
     Relay {
-        exposed_addr: Uri,
-        server_addr: Uri,
+        /// The address of the device where the WS-to-TCP bridge is running. Can be a hostname or IP address. A port can be specified with a colon.
+        exposed_addr: String,
+
+        /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        server: String,
 
         /// Name of the exposed machine
         name: String,
@@ -62,26 +66,25 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Serve { bind } => {
             use servicebridge::server;
-            let config = server::ServerConfig {
-                listen_addr: bind,
-            };
 
-            server::serve(config).await?;
-        
+            server::serve(bind).await?;
         },
         Command::Expose { bind, address } => {
             use servicebridge::expose;
 
-            expose::serve(bind, address).await?;
+            expose::serve(bind, util::parse_address(&address).await?).await?;
         },
         Command::Connect { bind, server_addr, name } => {
             use servicebridge::client;
 
-            client::serve(bind, server_addr).await?;
+            let server_addr = format!("ws://{}/connect?name={}", server_addr, name);
+            client::serve(bind, server_addr.try_into()?).await?;
         },
-        Command::Relay { exposed_addr, server_addr, name } => {
+        Command::Relay { exposed_addr, server, name } => {
             use servicebridge::bridge;
-            bridge::bridge(server_addr, exposed_addr).await?;
+            let exposed_addr = format!("ws://{}", exposed_addr);
+            let server_addr = format!("ws://{}/register?name={}", server, name);
+            bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
         },
     }
 

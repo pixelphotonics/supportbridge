@@ -22,18 +22,25 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
     // Handle messages on ws_send_receiver
     tokio::spawn(async move {
         while let Some(msg) = ws_send_receiver.recv().await {
-            ws_out.send(tungstenite::Message::Binary(msg)).await.expect("Failed to send to ws");
+            if let Err(e) = ws_out.send(tungstenite::Message::Binary(msg)).await {
+                log::error!("Error sending to ws: {:?}", e);
+                break;
+            }
         }
     });
 
     // Read from the websocket and write to the target socket
     tokio::spawn(async move {
         let target_socket: Arc<Mutex<Option<ClientConnection>>> = Arc::new(Mutex::new(None));
-        
 
         ws_in
             .for_each(|msg| async {
-                let msg = msg.expect("Failed to get message");
+                if msg.is_err() {
+                    log::error!("Error reading from ws: {:?}", msg.err().unwrap());
+                    return;
+                }
+
+                let msg = msg.unwrap();
 
                 if msg.is_text() {
                     match msg.to_text().unwrap() {
@@ -88,7 +95,9 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
                                 }
                             });
                         },
-                        _ => {}
+                        _ => {
+                            log::warn!("Unknown message: {}", msg.to_text().unwrap());
+                        }
                     }
                 } else if msg.is_binary() {
                     // forward to open socket, if any
