@@ -7,12 +7,15 @@ use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use log::{debug, info};
 
+use crate::protocol::ExposerInfo;
+
 
 pub struct TunnelServer {
     pub channels: HashMap<String, Channel>,
 }
 
 pub struct Channel {
+    info: ExposerInfo,
     server_write: Arc<Mutex<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tungstenite::Message>>>,
     server_read: Arc<Mutex<futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>>>,
     join_handle: Option<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>)>,
@@ -94,6 +97,7 @@ impl tungstenite::handshake::server::Callback for &mut CallbackHandler {
 
 async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpStream) -> Result<()> {
     let mut callback_handler = CallbackHandler{ uri: None };
+    let peer_addr = listen_stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws_stream = tokio_tungstenite::accept_hdr_async(listen_stream, &mut callback_handler).await?;
 
     let server_cmd = ServerPath::from_uri(callback_handler.uri.as_ref().unwrap())?;
@@ -115,10 +119,16 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
             let server_write = Arc::new(Mutex::new(ws_out));
             let server_read = Arc::new(Mutex::new(ws_in));
 
-            server_state.channels.insert(name, Channel {
+            server_state.channels.insert(name.clone(), Channel {
                 server_write,
                 server_read,
                 join_handle: None,
+                info: ExposerInfo {
+                    name,
+                    connection_time: chrono::Utc::now().to_rfc3339(),
+                    connected_client: None,
+                    peer_addr: peer_addr,
+                },
             });
         },
         ServerPath::Connect { name } => {
@@ -155,13 +165,17 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                 });
 
                 channel.join_handle = Some((task_1, task_2));
+                channel.info.connected_client = Some(peer_addr);
             } else {
                 log::error!("Channel not found: {}", name);
                 ws_stream.close(None).await?;
             }
         },
         ServerPath::List => {
-            //ws_stream.send(tungstenite::Message::Text())
+            let server_state = server.lock().await;
+            let infos: Vec<_> = server_state.channels.iter().map(|c| c.1.info.clone()).collect();
+            let data = serde_json::to_string(&infos)?;
+            ws_stream.send(tungstenite::Message::Text(data)).await?;
         },
     }
 
@@ -170,7 +184,7 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
 }
 
 pub async fn serve(listen_addr: core::net::SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(listen_addr).await.expect("Can't listen");
+    let listener = TcpListener::bind(listen_addr).await?;
     info!("Listening on {}", listen_addr);
 
     let server  = Arc::new(Mutex::new(TunnelServer {
@@ -178,7 +192,7 @@ pub async fn serve(listen_addr: core::net::SocketAddr) -> Result<()> {
     }));
 
     while let Ok((stream, _)) = listener.accept().await {
-        let peer = stream.peer_addr().expect("connected streams should have a peer address");
+        let peer = stream.peer_addr()?;
         info!("Peer address: {}", peer);
 
         match handle_connection(server.clone(), stream).await {

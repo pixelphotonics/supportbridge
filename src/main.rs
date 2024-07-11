@@ -55,6 +55,12 @@ enum Command {
         /// Name of the exposed machine
         name: String,
     },
+
+    /// List all open tunnels on the central server
+    List {
+        /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        server_addr: String,
+    },
 }
 
 #[tokio::main]
@@ -85,6 +91,18 @@ async fn main() -> anyhow::Result<()> {
             let exposed_addr = format!("ws://{}", exposed_addr);
             let server_addr = format!("ws://{}/register?name={}", server, name);
             bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
+        },
+        Command::List { server_addr } => {
+            use futures::{StreamExt};
+            let server_addr = format!("ws://{}/list", server_addr);
+            let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
+
+            while let Some(msg) = ws_server_stream.next().await {
+                let msg = msg?;
+                let infos: Vec<servicebridge::protocol::ExposerInfo> = serde_json::from_str(msg.to_text()?)?;
+
+                println!("{:?}", infos);
+            }
         },
     }
 
