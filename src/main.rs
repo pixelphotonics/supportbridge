@@ -1,12 +1,11 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
-use servicebridge::util;
-use crate::util::build_url_base;
+use supportbridge::util;
+use util::build_url_base;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-
     #[command(subcommand)]
     command: Command,
 }
@@ -86,23 +85,23 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::Serve { bind } => {
-            use servicebridge::server;
+            use supportbridge::server;
 
             server::serve(bind).await?;
         },
         Command::Expose { bind, address } => {
-            use servicebridge::expose;
+            use supportbridge::expose;
 
             expose::serve(bind, util::parse_address(&address).await?).await?;
         },
         Command::Connect { bind, server_addr, name } => {
-            use servicebridge::client;
+            use supportbridge::client;
 
             let server_addr = format!("{}/connect?name={}", build_url_base(&server_addr, false)?, name);
             client::serve(bind, server_addr.try_into()?).await?;
         },
         Command::Relay { exposed_addr, server, name } => {
-            use servicebridge::bridge;
+            use supportbridge::bridge;
             let exposed_addr = format!("ws://{}", exposed_addr);
             let server_addr = format!("{}register?name={}", build_url_base(&server, false)?, name);
             bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
@@ -114,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
             while let Some(msg) = ws_server_stream.next().await {
                 let msg = msg?;
-                let infos: Vec<servicebridge::protocol::ExposerInfo> = serde_json::from_str(msg.to_text()?)?;
+                let infos: Vec<supportbridge::protocol::ExposerInfo> = serde_json::from_str(msg.to_text()?)?;
 
                 println!("{:?}", infos);
             }
