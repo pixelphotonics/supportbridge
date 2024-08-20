@@ -1,7 +1,6 @@
 use clap::{Parser, Subcommand};
-use tungstenite::http::Uri;
 use std::net::SocketAddr;
-use servicebridge::{server, util};
+use servicebridge::util;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -65,7 +64,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Cli::parse();
 
@@ -93,7 +92,7 @@ async fn main() -> anyhow::Result<()> {
             bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
         },
         Command::List { server_addr } => {
-            use futures::{StreamExt};
+            use futures::StreamExt;
             let server_addr = format!("ws://{}/list", server_addr);
             let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
 

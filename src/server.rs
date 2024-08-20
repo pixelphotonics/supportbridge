@@ -5,7 +5,7 @@ use std::sync::Arc;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
-use log::{debug, info};
+use log::info;
 
 use crate::protocol::ExposerInfo;
 

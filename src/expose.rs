@@ -115,6 +115,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
 
 pub async fn serve(bind: SocketAddr, tcp_addr: SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
+    info!("Exposing {} to {}", tcp_addr, bind);
 
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
