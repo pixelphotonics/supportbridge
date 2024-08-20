@@ -12,3 +12,18 @@ pub async fn parse_address(address: &str) -> Result<SocketAddr> {
         Ok(result)
     }
 }
+
+pub fn build_url_base(address: &str, use_tls: bool) -> Result<String> {
+    let address: String = if address.starts_with("ws://") || address.starts_with("wss://") {
+        address.to_string()
+    } else {
+        let scheme = if use_tls { "wss" } else { "ws" };
+        format!("{}://{}", scheme, address)
+    };
+
+    if address.ends_with('/') {
+        Ok(address)
+    } else {
+        Ok(format!("{}/", address))
+    }
+}

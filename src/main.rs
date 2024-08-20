@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use servicebridge::util;
+use crate::util::build_url_base;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -37,6 +38,11 @@ enum Command {
         bind: SocketAddr,
 
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
+        /// If no URL schema is included, ws:// is assumed.
+        /// 
+        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
+        /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server_addr: String,
 
         /// Name of the exposed machine
@@ -49,6 +55,11 @@ enum Command {
         exposed_addr: String,
 
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
+        /// If no URL schema is included, ws:// is assumed.
+        /// 
+        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
+        /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server: String,
 
         /// Name of the exposed machine
@@ -58,6 +69,11 @@ enum Command {
     /// List all open tunnels on the central server
     List {
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
+        /// If no URL schema is included, ws:// is assumed.
+        /// 
+        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
+        /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server_addr: String,
     },
 }
@@ -82,18 +98,18 @@ async fn main() -> anyhow::Result<()> {
         Command::Connect { bind, server_addr, name } => {
             use servicebridge::client;
 
-            let server_addr = format!("ws://{}/connect?name={}", server_addr, name);
+            let server_addr = format!("{}/connect?name={}", build_url_base(&server_addr, false)?, name);
             client::serve(bind, server_addr.try_into()?).await?;
         },
         Command::Relay { exposed_addr, server, name } => {
             use servicebridge::bridge;
             let exposed_addr = format!("ws://{}", exposed_addr);
-            let server_addr = format!("ws://{}/register?name={}", server, name);
+            let server_addr = format!("{}register?name={}", build_url_base(&server, false)?, name);
             bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
         },
         Command::List { server_addr } => {
             use futures::StreamExt;
-            let server_addr = format!("ws://{}/list", server_addr);
+            let server_addr = format!("{}/list", build_url_base(&server_addr, false)?);
             let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
 
             while let Some(msg) = ws_server_stream.next().await {
