@@ -18,4 +18,21 @@ Overview of all components:
 To run the full setup locally, open four terminal sessions and run the following:
 
     cargo run -- serve
+    # [2024-08-20T09:34:58Z INFO  supportbridge::server] Listening on [::]:8081
+    
+    cargo run -- expose 100.93.114.74:22
+    # [2024-08-20T09:41:18Z INFO  supportbridge::expose] Exposing 100.93.114.74:22 to [::]:8082
+    
+    cargo run -- relay localhost:8082 localhost:8081 demo
+    # [2024-08-20T09:52:33Z INFO  supportbridge::bridge] Connected to exposed address: ws://localhost:8082/
+
+    cargo run -- connect localhost:8081 demo
+    # [2024-08-20T09:55:56Z INFO  supportbridge::client] Listening on [::]:8083
+
+    ssh -p 8083 user@localhost
+    # ...should establish an SSH connection
+
+When the server is running behind a reverse proxy with TLS enabled, use the the following:
+    cargo run -- relay localhost:8082 wss://supportbridge.example.com demo
+    # [2024-08-20T09:52:33Z INFO  supportbridge::bridge] Connected to exposed address: ws://localhost:8082/
 

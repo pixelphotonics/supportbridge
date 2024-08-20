@@ -96,19 +96,15 @@ async fn main() -> anyhow::Result<()> {
         },
         Command::Connect { bind, server_addr, name } => {
             use supportbridge::client;
-
-            let server_addr = format!("{}/connect?name={}", build_url_base(&server_addr, false)?, name);
-            client::serve(bind, server_addr.try_into()?).await?;
+            client::serve(bind, server_addr, name).await?;
         },
         Command::Relay { exposed_addr, server, name } => {
             use supportbridge::bridge;
-            let exposed_addr = format!("ws://{}", exposed_addr);
-            let server_addr = format!("{}register?name={}", build_url_base(&server, false)?, name);
-            bridge::bridge(server_addr.try_into()?, exposed_addr.try_into()?).await?;
+            bridge::bridge(server, name, exposed_addr.try_into()?).await?;
         },
         Command::List { server_addr } => {
             use futures::StreamExt;
-            let server_addr = format!("{}/list", build_url_base(&server_addr, false)?);
+            let server_addr = format!("{}list", build_url_base(&server_addr, false)?);
             let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
 
             while let Some(msg) = ws_server_stream.next().await {

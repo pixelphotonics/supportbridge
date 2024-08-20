@@ -1,18 +1,19 @@
-use std::collections::HashMap;
 use anyhow::Result;
-use tungstenite::http::Uri;
-use std::sync::Arc;
 use futures::{SinkExt, StreamExt};
-use tokio::sync::Mutex;
-use tokio::net::{TcpListener, TcpStream};
-use log::{debug, info};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::oneshot;
+
+use crate::{protocol::ServerPath, util::build_request};
 
 
-pub async fn bridge(server: Uri, exposed: Uri) -> Result<()> {
-    let (ws_server_stream, _) = tokio_tungstenite::connect_async(&server).await?;
-    let (ws_exposer_stream, _) = tokio_tungstenite::connect_async(&exposed).await?;
+pub async fn bridge(server_addr: String, peer_name: String, exposed: String) -> Result<()> {
+    let cmd = ServerPath::Register { name: peer_name };
+    let request = build_request(&server_addr, cmd)?;
+
+    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    log::info!("Connected to server: {}", server_addr);
+
+    let exposed_addr = format!("ws://{}", exposed);
+    let (ws_exposer_stream, _) = tokio_tungstenite::connect_async(&exposed_addr).await?;
+    log::info!("Connected to exposed address: {}", exposed);
 
     // Relay all messages from server to exposer and vice versa
     let (mut ws_server_out, mut ws_server_in) = ws_server_stream.split();

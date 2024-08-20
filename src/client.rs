@@ -8,7 +8,6 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
-use tungstenite::http::Uri;
 
 pub struct Client {
     pub target_addr: core::net::SocketAddr,
@@ -23,8 +22,10 @@ pub struct ClientConnection {
     pub close_sender: oneshot::Sender<()>,
 }
 
-async fn handle_connection(listen_stream: TcpStream, target_addr: Uri) -> Result<()> {
-    let (ws_server_stream, _) = tokio_tungstenite::connect_async(&target_addr).await?;
+async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: String) -> Result<()> {
+    let cmd = crate::protocol::ServerPath::Connect { name };
+    let request = crate::util::build_request(&ws_server, cmd)?;
+    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
     let (mut ws_out, mut ws_in) = ws_server_stream.split();
 
     let (mut tcp_read, mut tcp_write) = listen_stream.into_split();
@@ -63,18 +64,20 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: Uri) -> Result
     Ok(())
 }
 
-pub async fn serve(tcp_bind: SocketAddr, ws_server: Uri) -> Result<()> {
+pub async fn serve(tcp_bind: SocketAddr, ws_server: String, name: String) -> Result<()> {
+
     let listener = TcpListener::bind(tcp_bind).await?;
     info!("Listening on {}", tcp_bind);
 
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
         info!("Peer address: {}", peer);
-        
-        let ws_server_clone = ws_server.clone();
+
+        let ws_server = ws_server.clone();
+        let name = name.clone();
 
         tokio::spawn(async move {
-            match handle_connection(stream, ws_server_clone).await {
+            match handle_connection(stream, ws_server, name).await {
                 Ok(_) => {
                     log::info!("Connection closed: {}", peer);
                 },

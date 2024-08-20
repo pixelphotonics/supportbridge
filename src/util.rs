@@ -27,3 +27,55 @@ pub fn build_url_base(address: &str, use_tls: bool) -> Result<String> {
         Ok(format!("{}/", address))
     }
 }
+
+pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Result<tungstenite::handshake::client::Request> {
+    let parsed_url = match url::Url::parse(address) {
+        Ok(url) => url,
+        Err(_) => {
+            url::Url::parse(format!("ws://{}", address).as_str())?
+        },
+    };
+
+    let base_path = parsed_url.path().to_string();
+    let path_and_query = if base_path.ends_with('/') {
+        format!("{}{}", base_path, command.to_string())
+    } else {
+        format!("{}/{}", base_path, command.to_string())
+    };
+
+    let uri = tungstenite::http::Uri::builder()
+        .scheme(parsed_url.scheme())
+        .authority(parsed_url.authority())
+        .path_and_query(path_and_query)
+        .build()
+        .unwrap();
+
+    let mut host = parsed_url.host_str().unwrap().to_string();
+    if let Some(port) = parsed_url.port() {
+        host = format!("{}:{}", host, port);
+    }
+
+    let req = tungstenite::handshake::client::Request::builder()
+        .method("GET")
+        .header("Host", host)
+        .header("Connection", "Upgrade")
+        .header("Upgrade", "websocket")
+        .header("Sec-WebSocket-Version", "13")
+        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key());
+
+    // use username / password info if available
+    let req = if parsed_url.username().len() > 0 || parsed_url.password().is_some() {
+        use base64::prelude::*;
+        let auth = format!("{}:{}", parsed_url.username(), parsed_url.password().unwrap_or(""));
+        let auth = format!("Basic {}", BASE64_STANDARD.encode(auth));
+        req.header("Authorization", auth)
+    } else {
+        req
+    };
+
+    let req = req
+        .uri(uri)
+        .body(())?;
+
+    Ok(req)
+}
