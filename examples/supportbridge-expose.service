@@ -1,0 +1,13 @@
+[Unit]
+Description=Expose the local SSH port as websocket on port 8083
+After=multi-user.target network.target
+ 
+[Service]
+Type=simple
+Environment="RUST_LOG=info"
+Restart=on-failure
+RestartSec=3s
+ExecStart=/usr/bin/supportbridge expose localhost:22 --bind "[::]:8083"
+ 
+[Install]
+WantedBy=multi-user.target
