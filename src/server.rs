@@ -45,7 +45,9 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
     let peer_addr = listen_stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
     let mut ws_stream = tokio_tungstenite::accept_hdr_async(listen_stream, &mut callback_handler).await?;
 
-    let server_cmd = ServerPath::from_uri(callback_handler.uri.as_ref().unwrap())?;
+    let uri = callback_handler.uri.as_ref().ok_or_else(|| anyhow::anyhow!("No URI found"))?;
+    log::debug!("URI: {}", uri);
+    let server_cmd = ServerPath::from_uri(uri)?;
 
     match server_cmd {
         ServerPath::Register { name } => {
