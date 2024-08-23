@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::ops::DerefMut;
 use std::sync::Arc;
 use futures::{SinkExt, StreamExt};
 use tokio::sync::Mutex;
@@ -8,6 +9,9 @@ use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+use tungstenite::Message;
+
+use crate::ProxyTasks;
 
 pub struct Client {
     pub target_addr: core::net::SocketAddr,
@@ -22,16 +26,23 @@ pub struct ClientConnection {
     pub close_sender: oneshot::Sender<()>,
 }
 
-async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: String) -> Result<()> {
-    let cmd = crate::protocol::ServerPath::Connect { name };
-    let request = crate::util::build_request(&ws_server, cmd)?;
-    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
-    let (mut ws_out, mut ws_in) = ws_server_stream.split();
 
-    let (mut tcp_read, mut tcp_write) = listen_stream.into_split();
+
+
+pub async fn tcp_to_ws<WSTX, WSRX> (
+    tcp_stream: TcpStream,
+    mut ws_in: impl DerefMut<Target = WSRX> + Send + 'static,
+    mut ws_out: impl DerefMut<Target = WSTX> + Send + 'static,
+) -> Result<ProxyTasks> 
+where
+    WSTX: futures::sink::Sink<Message, Error=tungstenite::error::Error> + std::marker::Unpin + std::marker::Send + 'static,
+    WSRX: futures::stream::Stream<Item=std::result::Result<Message, tungstenite::error::Error>> + std::marker::Unpin + std::marker::Send + 'static,
+{
+
+    let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
 
     // Relay all messages from server to exposer and vice versa
-    let task_1: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let ws_to_tcp: JoinHandle<Result<()>> = tokio::spawn(async move {
         while let Some(msg) = ws_in.next().await {
             let msg = msg?;
             if msg.is_binary() {
@@ -42,7 +53,7 @@ async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: St
         Ok(())
     });
 
-    let task_2: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let tcp_to_ws: JoinHandle<Result<()>> = tokio::spawn(async move {
         loop {
             let mut buf = vec![0; 1024];
             let n = tcp_read.read(buf.as_mut_slice()).await?;
@@ -57,9 +68,22 @@ async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: St
         Ok(())
     });
 
-    // join tasks
-    task_1.await??;
-    task_2.await??;
+    Ok(ProxyTasks {
+        down_to_up: tcp_to_ws,
+        up_to_down: ws_to_tcp,
+    })
+
+}
+
+
+async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: String) -> Result<()> {
+    let cmd = crate::protocol::ServerPath::Connect { name };
+    let request = crate::util::build_request(&ws_server, cmd)?;
+    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    let (ws_out, ws_in) = ws_server_stream.split();
+
+    let bridge = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out)).await?;
+    bridge.join().await?;
 
     Ok(())
 }

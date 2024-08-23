@@ -20,6 +20,11 @@ pub enum ServerPath {
         name: String,
     },
     List,
+
+    /*/// Free an existing connection and allow a new connection to be opened to the exposed port
+    Free {
+        name: String,
+    },*/
 }
 
 
