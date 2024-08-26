@@ -24,6 +24,7 @@ pub struct ServerOptions {
     pub open_port: bool,
     pub port_range: RangeInclusive<u16>,
     pub overwrite_existing_connection: bool,
+    pub overwrite_existing_exposer: bool,
 }
 
 pub struct Channel {
@@ -101,11 +102,18 @@ impl tungstenite::handshake::server::Callback for &mut CallbackHandler {
 }
 
 async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListener> {
+    log::debug!("Open port in range: {:?}", port_range);
     for port in port_range.clone() {
-        let listener = TcpListener::bind(("[::]", port)).await;
-        if let Ok(listener) = listener {
-            log::info!("Opened port: {}", port);
-            return Ok(listener);
+        log::debug!("Trying port: {}", port);
+        let listener = TcpListener::bind(("::", port)).await;
+        match listener {
+            Ok(listener) => {
+                log::info!("Opened port: {}", port);
+                return Ok(listener);
+            },
+            Err(e) => {
+                log::debug!("Failed to open port: {}", e);
+            }
         }
     }
 
@@ -212,18 +220,13 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
     
 }
 
-pub async fn serve(listen_addr: core::net::SocketAddr) -> Result<()> {
-    let listener = TcpListener::bind(listen_addr).await?;
-    info!("Listening on {}", listen_addr);
+pub async fn serve(options: ServerOptions) -> Result<()> {
+    let listener = TcpListener::bind(&options.listen_addr).await?;
+    info!("Listening on {}", options.listen_addr);
 
     let server  = Arc::new(Mutex::new(TunnelServer {
         channels: HashMap::new(),
-        options: ServerOptions {
-            listen_addr,
-            open_port: true,
-            port_range: 11000..=64000,
-            overwrite_existing_connection: true,
-        }
+        options,
     }));
 
     while let Ok((stream, _)) = listener.accept().await {

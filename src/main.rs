@@ -18,6 +18,31 @@ enum Command {
         /// The Ip address:port combination to listen on.
         #[clap(long, default_value = "[::]:8081")]
         bind: SocketAddr,
+
+        /// Don't overwrite existing channels when a new exposer connection is made with the same name.
+        /// By default, the server will close the existing connection to the exposer and allow the new exposer to take its place.
+        #[arg(short='e', long)]
+        dont_overwrite_exposer: bool,
+
+        /// Don't overwrite existing connection to channels when a new exposer connection is made.
+        /// 
+        /// By default, the server will close the existing connection to the channel and allow the new client to connect to the exposer.
+        #[arg(short='c', long)]
+        dont_overwrite_connection: bool,
+
+        /// Open a TCP port on the server to which connections can be made directly.
+        /// This allows third-party tools to connect to the exposer directly by connecting to the opened port on the server.
+        /// If this is false (the default), an additional client instance must be run to connect to the exposer via the server.
+        #[arg(short, long)]
+        open_ports: bool,
+
+        /// The minimum port number to use when opening ports on the server.
+        #[arg(long, default_value = "11000")]
+        min_port: u16,
+
+        /// The maximum port number to use when opening ports on the server.
+        #[arg(long, default_value = "64000")]
+        max_port: u16,
     },
 
     /// Run the websocket-to-TCP bridge
@@ -84,10 +109,18 @@ async fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
 
     match args.command {
-        Command::Serve { bind } => {
+        Command::Serve { bind, dont_overwrite_exposer, dont_overwrite_connection, open_ports, min_port, max_port } => {
             use supportbridge::server;
 
-            server::serve(bind).await?;
+            let server_options = server::ServerOptions {
+                listen_addr: bind,
+                open_port: open_ports,
+                port_range: min_port..=max_port,
+                overwrite_existing_connection: !dont_overwrite_connection,
+                overwrite_existing_exposer: !dont_overwrite_exposer,
+            };
+
+            server::serve(server_options).await?;
         },
         Command::Expose { bind, address } => {
             use supportbridge::expose;

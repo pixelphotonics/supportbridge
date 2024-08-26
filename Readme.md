@@ -26,10 +26,20 @@ To run the full setup locally, open four terminal sessions and run the following
     cargo run -- relay localhost:8082 localhost:8081 demo
     # [2024-08-20T09:52:33Z INFO  supportbridge::bridge] Connected to exposed address: ws://localhost:8082/
 
+Now, we do have a tunnel connection between the server and the exposer.
+In order to connect to the exposed port on the exposer, we can either 
+1. connect directly to the server (if the `-o` option was specified), where the port number is reported on the output of the server application or can be checked via the `list` subcommand.
+
+    ssh -o StrictHostKeychecking=no -o UserKnownHostsFile=/dev/null -p 11000 user@localhost
+    # ...should establish an SSH connection
+
+2. or (if the `-o` option was not specified), connect via another instance of `supportbridge` that connects to the server via websockets and exposes a port locally:
+
+
     cargo run -- connect localhost:8081 demo
     # [2024-08-20T09:55:56Z INFO  supportbridge::client] Listening on [::]:8083
 
-    ssh -p 8083 user@localhost
+    ssh -o StrictHostKeychecking=no -o UserKnownHostsFile=/dev/null -p 8083 user@localhost
     # ...should establish an SSH connection
 
 When the server is running behind a reverse proxy with TLS enabled, use the the following:
