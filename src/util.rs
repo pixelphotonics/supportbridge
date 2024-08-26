@@ -29,11 +29,10 @@ pub fn build_url_base(address: &str, use_tls: bool) -> Result<String> {
 }
 
 pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Result<tungstenite::handshake::client::Request> {
-    let parsed_url = match url::Url::parse(address) {
-        Ok(url) => url,
-        Err(_) => {
-            url::Url::parse(format!("ws://{}", address).as_str())?
-        },
+    let parsed_url = if address.starts_with("ws://") || address.starts_with("wss://") {
+        url::Url::parse(address)?
+    } else {
+        url::Url::parse(format!("ws://{}", address).as_str())?
     };
 
     let base_path = parsed_url.path().to_string();
@@ -42,6 +41,8 @@ pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Res
     } else {
         format!("{}/{}", base_path, command.to_string())
     };
+
+    log::info!("URL scheme '{}' authority: '{}', path: '{}'", parsed_url.scheme(), parsed_url.authority(), path_and_query);
 
     let uri = tungstenite::http::Uri::builder()
         .scheme(parsed_url.scheme())
@@ -78,4 +79,22 @@ pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Res
         .body(())?;
 
     Ok(req)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_request() {
+        let req = build_request("localhost", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://localhost/list");
+
+        let req = build_request("localhost:8080", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://localhost:8080/list");
+
+        let req = build_request("ws://example.com:8080", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://example.com:8080/list");
+    }
 }
