@@ -143,7 +143,7 @@ async fn open_connection_port(id: String, server: Arc<Mutex<TunnelServer>>, port
 
         let ws_out = channel.server_write.clone().lock_owned().await;
         let ws_in = channel.server_read.clone().lock_owned().await;
-        let bridge = tcp_to_ws(stream, ws_in, ws_out).await?;
+        let bridge = tcp_to_ws(stream, ws_in, ws_out)?;
 
         channel.set_proxy_tasks(bridge, format!("{}", addr), true)?;
     }

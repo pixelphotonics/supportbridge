@@ -29,7 +29,7 @@ pub struct ClientConnection {
 
 
 
-pub async fn tcp_to_ws<WSTX, WSRX> (
+pub fn tcp_to_ws<WSTX, WSRX> (
     tcp_stream: TcpStream,
     mut ws_in: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_out: impl DerefMut<Target = WSTX> + Send + 'static,
@@ -82,7 +82,7 @@ async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: St
     let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
     let (ws_out, ws_in) = ws_server_stream.split();
 
-    let bridge = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out)).await?;
+    let bridge = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;
     bridge.join().await?;
 
     Ok(())
