@@ -5,11 +5,22 @@ use tungstenite::http::Uri;
 use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientInfo {
+    pub peer_addr: String,
+    pub uses_port: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExposerInfo {
     pub name: String,
-    pub connection_time: String,
-    pub connected_client: Option<String>,
+
+    /// Time when the channel was opened
+    pub open_time: String,
     pub peer_addr: String,
+    pub open_port: Option<u16>,
+
+    /// The name of the connected client
+    pub connected_client: Option<ClientInfo>,
 }
 
 pub enum ServerPath {

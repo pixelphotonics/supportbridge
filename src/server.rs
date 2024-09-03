@@ -10,7 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use log::info;
 
 use crate::client::tcp_to_ws;
-use crate::protocol::{ExposerInfo, ServerPath};
+use crate::protocol::{ClientInfo, ExposerInfo, ServerPath};
 use crate::ProxyTasks;
 
 
@@ -49,13 +49,16 @@ impl Drop for Channel {
 }
 
 impl Channel {
-    fn set_proxy_tasks(&mut self, proxy_tasks: ProxyTasks, peer_addr: String) -> Result<()> {
+    fn set_proxy_tasks(&mut self, proxy_tasks: ProxyTasks, peer_addr: String, is_via_port: bool) -> Result<()> {
         if self.join_handle.is_some() {
             return Err(anyhow!("Proxy tasks already set"));
         }
 
         self.join_handle = Some(proxy_tasks);
-        self.info.connected_client = Some(peer_addr);
+        self.info.connected_client = Some(ClientInfo {
+            peer_addr,
+            uses_port: is_via_port,
+        });
 
         Ok(())
     }
@@ -122,6 +125,12 @@ async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListene
 
 async fn open_connection_port(id: String, server: Arc<Mutex<TunnelServer>>, port_range: RangeInclusive<u16>) -> Result<()> {
     let tcp_listener = open_tcp_listener(port_range).await?;
+    {
+        // store information about the open port
+        let mut server_state = server.lock().await;
+        let channel = server_state.channels.get_mut(&id).ok_or(anyhow!("Unknown channel id: {}", id))?;
+        channel.info.open_port = Some(tcp_listener.local_addr()?.port());
+    }
 
     loop {
         let (stream, addr) = tcp_listener.accept().await?;
@@ -136,7 +145,7 @@ async fn open_connection_port(id: String, server: Arc<Mutex<TunnelServer>>, port
         let ws_in = channel.server_read.clone().lock_owned().await;
         let bridge = tcp_to_ws(stream, ws_in, ws_out).await?;
 
-        channel.set_proxy_tasks(bridge, format!("{}", addr))?;
+        channel.set_proxy_tasks(bridge, format!("{}", addr), true)?;
     }
 }
 
@@ -177,9 +186,10 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                 join_handle: None,
                 info: ExposerInfo {
                     name: name.clone(),
-                    connection_time: chrono::Utc::now().to_rfc3339(),
+                    open_time: chrono::Utc::now().to_rfc3339(),
                     connected_client: None,
                     peer_addr: peer_addr,
+                    open_port: None,
                 },
                 overwrite_existing_connection: server_state.options.overwrite_existing_connection,
                 open_port_task,
@@ -202,7 +212,7 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                     Box::new(client_write),
                 ).await?;
 
-                channel.set_proxy_tasks(ws_proxy, peer_addr)?;
+                channel.set_proxy_tasks(ws_proxy, peer_addr, false)?;
             } else {
                 log::error!("Channel not found: {}", name);
                 ws_stream.close(None).await?;
@@ -213,6 +223,7 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
             let infos: Vec<_> = server_state.channels.iter().map(|c| c.1.info.clone()).collect();
             let data = serde_json::to_string(&infos)?;
             ws_stream.send(tungstenite::Message::Text(data)).await?;
+            ws_stream.close(None).await?;
         },
     }
 

@@ -99,6 +99,10 @@ enum Command {
         /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
         /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server_addr: String,
+
+        /// Print verbose information
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
 
@@ -135,16 +139,65 @@ async fn main() -> anyhow::Result<()> {
             use supportbridge::bridge;
             bridge::bridge(server, name, exposed_addr.try_into()?).await?;
         },
-        Command::List { server_addr } => {
+        Command::List { server_addr, verbose } => {
             use futures::StreamExt;
             let server_addr = format!("{}list", build_url_base(&server_addr, false)?);
             let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
 
             while let Some(msg) = ws_server_stream.next().await {
                 let msg = msg?;
-                let infos: Vec<supportbridge::protocol::ExposerInfo> = serde_json::from_str(msg.to_text()?)?;
+                match msg {
+                    tungstenite::Message::Text(textmsg) => {
+                        if let Ok(infos) = serde_json::from_str::<Vec<supportbridge::protocol::ExposerInfo>>(&textmsg) {
+                            // Only for feature "tabwriter"
+                            #[cfg(feature = "tabwriter")]
+                            {
+                                let mut table = infos
+                                    .iter()
+                                    .map(|channel| {
+                                        
+                                        format!(
+                                            "| {}\t| {}\t| {}\t| {}\t| {} \t|",
+                                            channel.name,
+                                            channel.peer_addr,
+                                            channel.open_time,
+                                            channel.open_port.map(|p| p.to_string()).unwrap_or("-".to_string()),
+                                            match &channel.connected_client {
+                                                Some(client) => format!("({}) {}", if client.uses_port { "P" } else { "W" }, client.peer_addr),
+                                                None => format!("-"),
+                                            }
+                                        )
+                                    })
+                                    .collect::<Vec<_>>();
 
-                println!("{:?}", infos);
+                                table.insert(0, "| Name\t| Peer\t| Open since\t| Server port\t| Occupied \t|".to_string());
+                                table.insert(1, "| ====\t| ====\t| ==========\t| ===========\t| ======== \t|".to_string());
+
+                                use std::io::Write;
+                                let mut tw = tabwriter::TabWriter::new(std::io::stdout());
+                                tw.write_all(table.join("\n").as_bytes())?;
+                                tw.flush()?;
+                                println!("")
+                            }
+
+                            #[cfg(not(feature = "tabwriter"))]
+                            println!("List: {:?}", infos);
+
+                            break;
+                        } else {
+                            log::warn!("Invalid message from server: {}", textmsg);
+                        }
+                    },
+                    tungstenite::Message::Binary(_) => {
+                        log::warn!("Invalid message from server: binary");
+                    },
+                    tungstenite::Message::Close(_) => {
+                        break;
+                    },
+                    _ => {
+                        log::trace!("Other message type");
+                    }
+                }
             }
         },
     }
