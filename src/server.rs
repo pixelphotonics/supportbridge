@@ -186,7 +186,7 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                 join_handle: None,
                 info: ExposerInfo {
                     name: name.clone(),
-                    open_time: chrono::Utc::now().to_rfc3339(),
+                    open_time: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     connected_client: None,
                     peer_addr: peer_addr,
                     open_port: None,
