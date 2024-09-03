@@ -17,7 +17,7 @@ Overview of all components:
 
 To run the full setup locally, open four terminal sessions and run the following:
 
-    cargo run -- serve
+    cargo run -- serve --open-ports
     # [2024-08-20T09:34:58Z INFO  supportbridge::server] Listening on [::]:8081
     
     cargo run -- expose 100.93.114.74:22
@@ -25,6 +25,11 @@ To run the full setup locally, open four terminal sessions and run the following
     
     cargo run -- relay localhost:8082 localhost:8081 demo
     # [2024-08-20T09:52:33Z INFO  supportbridge::bridge] Connected to exposed address: ws://localhost:8082/
+
+    cargo run -- list localhost:8081
+    # | Name  | Peer         | Open since            | Server port  | Occupied   |
+    # | ====  | ====         | ==========            | ===========  | ========   |
+    # | demo  | [::1]:35428  | 2024-09-03T17:48:40Z  | -            | -          |
 
 Now, we do have a tunnel connection between the server and the exposer.
 In order to connect to the exposed port on the exposer, we can either 

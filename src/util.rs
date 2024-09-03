@@ -98,3 +98,46 @@ mod tests {
         assert_eq!(req.uri().to_string(), "ws://example.com:8080/list");
     }
 }
+
+
+use core::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+/// A guarded JoinHandle that cancels the task on drop.
+pub struct GuardedJoinHandle<T>(tokio::task::JoinHandle<T>);
+
+/// Same as tokio::task::spawn, but returns a GuardedJoinHandle, which
+/// aborts the task when dropped.
+pub fn spawn_guarded<T>(future: T) -> GuardedJoinHandle<T::Output>
+where
+    T: Future + Send + 'static,
+    T::Output: Send + 'static,
+{
+    GuardedJoinHandle(tokio::task::spawn(future))
+}
+
+impl GuardedJoinHandle<()> {
+    pub fn abort(self) {
+        self.0.abort();
+    }
+
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle{
+        self.0.abort_handle()
+    }
+}
+
+impl<T> Future for GuardedJoinHandle<T> {
+    type Output = <tokio::task::JoinHandle<T> as Future>::Output;
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+
+impl<T> Drop for GuardedJoinHandle<T> {
+    fn drop(&mut self) {
+        log::trace!("Dropping GuardedJoinHandle");
+        self.0.abort();
+    }
+}

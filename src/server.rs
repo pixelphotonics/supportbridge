@@ -11,7 +11,7 @@ use log::info;
 
 use crate::client::tcp_to_ws;
 use crate::protocol::{ClientInfo, ExposerInfo, ServerPath};
-use crate::ProxyTasks;
+use crate::util::{spawn_guarded, GuardedJoinHandle};
 
 
 pub struct TunnelServer {
@@ -32,16 +32,13 @@ pub struct Channel {
     info: ExposerInfo,
     server_write: Arc<Mutex<futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tungstenite::Message>>>,
     server_read: Arc<Mutex<futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>>>,
-    join_handle: Option<ProxyTasks>,
     open_port_task: Option<JoinHandle<Result<()>>>,
+
+    current_task: Option<GuardedJoinHandle<Result<()>>>,
 }
 
 impl Drop for Channel {
     fn drop(&mut self) {
-        if let Some(join_handle) = self.join_handle.take() {
-            join_handle.abort();
-        }
-
         if let Some(open_port_task) = self.open_port_task.take() {
             open_port_task.abort();
         }
@@ -49,41 +46,61 @@ impl Drop for Channel {
 }
 
 impl Channel {
-    fn set_proxy_tasks(&mut self, proxy_tasks: ProxyTasks, peer_addr: String, is_via_port: bool) -> Result<()> {
-        if self.join_handle.is_some() {
-            return Err(anyhow!("Proxy tasks already set"));
+    fn spawn_idle_task(&mut self, server_ptr: Arc<Mutex<TunnelServer>>) {
+        self.info.connected_client = None;
+        let channel_name = self.info.name.clone();
+        let ws_read = self.server_read.clone();
+        let task = spawn_guarded(async move {
+            // Idle state: listen to the unused websocket connection to see if it closes
+            let mut ws_read = ws_read.lock().await;
+            while let Some(_) = ws_read.next().await {
+                // nothing to do, just wait for the connection to close
+            }
+
+            log::info!("Channel closed: {}", channel_name);
+            server_ptr.lock().await.channels.remove(&channel_name);
+            Ok(())
+        });
+
+        //self.abort_handles.push(join_handle.abort_handle());
+        self.current_task = Some(task);
+    }
+
+    fn set_channel_user(&mut self, task: GuardedJoinHandle<Result<()>>, peer_addr: String, is_via_port: bool, server_ptr: Arc<Mutex<TunnelServer>>) {
+        if self.info.connected_client.is_some() {
+            if self.overwrite_existing_connection {
+                log::info!("Overwriting existing connection");
+            } else {
+                log::warn!("Client connection already active, ignoring connection attempt");
+                // dropping the passed task
+                return;
+            }
         }
 
-        self.join_handle = Some(proxy_tasks);
+        let channel_name = self.info.name.clone();
+
+        // This task does not need to be aborted. If all tasks finish and this spawns the idle task,
+        // this is fine, as the abort_handle of the idle task is added to the abort handle list within spawn_idle_task()
+        let task = spawn_guarded(async move {
+            log::debug!("set_channel_user1");
+            task.await??;
+            log::debug!("set_channel_user2");
+
+            let mut server_state = server_ptr.lock().await;
+            if let Some(channel) = server_state.channels.get_mut(&channel_name) {
+                channel.spawn_idle_task(server_ptr.clone());
+            }
+
+            Ok(())
+        });
+
+        self.current_task = Some(task);
         self.info.connected_client = Some(ClientInfo {
             peer_addr,
             uses_port: is_via_port,
         });
-
-        Ok(())
     }
 
-    fn close_proxy_tasks(&mut self) {
-        if let Some(join_handle) = self.join_handle.take() {
-            log::info!("Closing client connection");
-            join_handle.abort();
-        }
-        self.info.connected_client = None;
-    }
-
-    async fn prepare_new_connection(&mut self) -> Result<()>{
-        if self.join_handle.is_some() {
-            if self.overwrite_existing_connection {
-                self.close_proxy_tasks();
-            } else {
-                return Err(anyhow!("Client connection already active"));
-            }
-        }
-
-        let mut lock = self.server_write.lock().await;
-        lock.send(tungstenite::Message::Text("init".into())).await?;
-        Ok(())
-    }
 }
 
 struct CallbackHandler {
@@ -135,17 +152,28 @@ async fn open_connection_port(id: String, server: Arc<Mutex<TunnelServer>>, port
     loop {
         let (stream, addr) = tcp_listener.accept().await?;
 
+        log::debug!("Connection on open port: {}", addr);
+
         // get server streams
         let mut server_state = server.lock().await;
         let channel = server_state.channels.get_mut(&id).ok_or(anyhow!("Unknown channel id: {}", id))?;
 
-        channel.prepare_new_connection().await?;
+        let ws_out = channel.server_write.clone();
+        let ws_in = channel.server_read.clone();
 
-        let ws_out = channel.server_write.clone().lock_owned().await;
-        let ws_in = channel.server_read.clone().lock_owned().await;
-        let bridge = tcp_to_ws(stream, ws_in, ws_out)?;
+        let task = spawn_guarded(async move {
+            let mut ws_out = ws_out.lock_owned().await;
+            ws_out.send(tungstenite::Message::Text("init".into())).await?;
 
-        channel.set_proxy_tasks(bridge, format!("{}", addr), true)?;
+            let (task_1, task_2) = tcp_to_ws(stream, ws_in.lock_owned().await, ws_out)?;
+            log::debug!("open_connection_port1");
+            task_1.await??;
+            task_2.await??;
+            log::debug!("open_connection_port2");
+            Ok(())
+        });
+
+        channel.set_channel_user(task, format!("{}", addr), true, server.clone());
     }
 }
 
@@ -180,10 +208,9 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
             // Create new channel
             let (ws_out, ws_in) = ws_stream.split();
 
-            let new_channel = Channel {
+            let mut new_channel = Channel {
                 server_write: Arc::new(Mutex::new(ws_out)),
                 server_read: Arc::new(Mutex::new(ws_in)),
-                join_handle: None,
                 info: ExposerInfo {
                     name: name.clone(),
                     open_time: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
@@ -193,26 +220,41 @@ async fn handle_connection(server: Arc<Mutex<TunnelServer>>, listen_stream: TcpS
                 },
                 overwrite_existing_connection: server_state.options.overwrite_existing_connection,
                 open_port_task,
+
+                current_task: None,
             };
 
+            new_channel.spawn_idle_task(server.clone());
             server_state.channels.insert(name.clone(), new_channel);
         },
         ServerPath::Connect { name } => {
             let mut server_state = server.lock().await;
             if let Some(channel) = server_state.channels.get_mut(&name) {
                 log::info!("Connect to channel: {}", name);
-                channel.prepare_new_connection().await?;
 
-                let (client_write, client_read) = ws_stream.split();
+                let ws_out = channel.server_write.clone();
+                let ws_in = channel.server_read.clone();
 
-                let ws_proxy = crate::ws_bridge(
-                    channel.server_read.clone().lock_owned().await,
-                    channel.server_write.clone().lock_owned().await,
-                    Box::new(client_read),
-                    Box::new(client_write),
-                ).await?;
+                let task = spawn_guarded(async move {
+                    let (client_write, client_read) = ws_stream.split();
+                    let mut ws_out = ws_out.lock_owned().await;
+                    ws_out.send(tungstenite::Message::Text("init".into())).await?;
 
-                channel.set_proxy_tasks(ws_proxy, peer_addr, false)?;
+                    let (task1, task2) = crate::ws_bridge(
+                        ws_in.lock_owned().await,
+                        ws_out,
+                        Box::new(client_read),
+                        Box::new(client_write),
+                    )?;
+
+                    task1.await??;
+                    task2.await??;
+        
+                    Ok(())
+                });
+        
+                channel.set_channel_user(task, peer_addr, false, server.clone());
+
             } else {
                 log::error!("Channel not found: {}", name);
                 ws_stream.close(None).await?;

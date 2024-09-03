@@ -8,10 +8,8 @@ use log::{debug, info};
 use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tungstenite::Message;
-
-use crate::ProxyTasks;
+use crate::util::{spawn_guarded, GuardedJoinHandle};
 
 pub struct Client {
     pub target_addr: core::net::SocketAddr,
@@ -33,7 +31,7 @@ pub fn tcp_to_ws<WSTX, WSRX> (
     tcp_stream: TcpStream,
     mut ws_in: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_out: impl DerefMut<Target = WSTX> + Send + 'static,
-) -> Result<ProxyTasks> 
+) -> Result<(GuardedJoinHandle<Result<()>>, GuardedJoinHandle<Result<()>>)> 
 where
     WSTX: futures::sink::Sink<Message, Error=tungstenite::error::Error> + std::marker::Unpin + std::marker::Send + 'static,
     WSRX: futures::stream::Stream<Item=std::result::Result<Message, tungstenite::error::Error>> + std::marker::Unpin + std::marker::Send + 'static,
@@ -42,10 +40,12 @@ where
     let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
 
     // Relay all messages from server to exposer and vice versa
-    let ws_to_tcp: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let ws_to_tcp: GuardedJoinHandle<Result<()>> = spawn_guarded(async move {
+        log::debug!("Starting WS->TCP relay");
         while let Some(msg) = ws_in.next().await {
             let msg = msg?;
             if msg.is_binary() {
+                log::debug!("WS->TCP: {} bytes", msg.len());
                 tcp_write.write_all(msg.into_data().as_slice()).await?;
             }
         }
@@ -53,7 +53,8 @@ where
         Ok(())
     });
 
-    let tcp_to_ws: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let tcp_to_ws: GuardedJoinHandle<Result<()>> = spawn_guarded(async move {
+        log::debug!("Starting TCP->WS relay");
         loop {
             let mut buf = vec![0; 1024];
             let n = tcp_read.read(buf.as_mut_slice()).await?;
@@ -68,10 +69,7 @@ where
         Ok(())
     });
 
-    Ok(ProxyTasks {
-        down_to_up: tcp_to_ws,
-        up_to_down: ws_to_tcp,
-    })
+    Ok((tcp_to_ws, ws_to_tcp))
 
 }
 
@@ -82,8 +80,10 @@ async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: St
     let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
     let (ws_out, ws_in) = ws_server_stream.split();
 
-    let bridge = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;
-    bridge.join().await?;
+    let (task1, task2) = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;
+    task1.await?;
+    task2.await?;
+    //bridge.join().await?;
 
     Ok(())
 }

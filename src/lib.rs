@@ -1,5 +1,6 @@
 use tokio::{net::TcpStream, task::JoinHandle};
 use anyhow::Result;
+use util::{spawn_guarded, GuardedJoinHandle};
 use std::ops::DerefMut;
 use tungstenite::Message;
 use futures::{SinkExt, StreamExt};
@@ -39,17 +40,17 @@ impl ProxyTasks {
 }
 
 
-pub async fn ws_bridge<WSTX, WSRX> (
+pub fn ws_bridge<WSTX, WSRX> (
     mut ws_up_rx: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_up_tx: impl DerefMut<Target = WSTX> + Send + 'static,
     mut ws_down_rx: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_down_tx: impl DerefMut<Target = WSTX> + Send + 'static,
-) -> Result<ProxyTasks> 
+) -> Result<(GuardedJoinHandle<Result<()>>, GuardedJoinHandle<Result<()>>)> 
 where
     WSTX: futures::sink::Sink<Message, Error=tungstenite::error::Error> + std::marker::Unpin + std::marker::Send + 'static,
     WSRX: futures::stream::Stream<Item=std::result::Result<Message, tungstenite::error::Error>> + std::marker::Unpin + std::marker::Send + 'static,
 {
-    let up_to_down: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let up_to_down: GuardedJoinHandle<Result<()>> = spawn_guarded(async move {
         while let Some(msg) = ws_up_rx.next().await {
             let msg = msg?;
             log::trace!("up -> down: {} bytes", msg.len());
@@ -59,7 +60,7 @@ where
         Ok(())
     });
 
-    let down_to_up: JoinHandle<Result<()>> = tokio::spawn(async move {
+    let down_to_up: GuardedJoinHandle<Result<()>> = spawn_guarded(async move {
         while let Some(msg) = ws_down_rx.next().await {
             let msg = msg?;
             log::trace!("down -> up: {} bytes", msg.len());
@@ -69,9 +70,6 @@ where
         Ok(())
     });
 
-    Ok(ProxyTasks {
-        down_to_up,
-        up_to_down,
-    })
+    Ok((down_to_up, up_to_down))
 
 }

@@ -104,6 +104,8 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
                     if let Some(socket) = target_socket.lock().await.as_mut() {
                         log::debug!("Forwarding message to target, {} bytes", msg.len());
                         socket.write_half.write(&msg.into_data()).await.expect("Failed to write to target");
+                    } else {
+                        log::warn!("No target socket available. Init message required.");
                     }
                 }
             })
