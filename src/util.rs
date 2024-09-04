@@ -112,7 +112,7 @@ where
     GuardedJoinHandle(tokio::task::spawn(future))
 }
 
-impl GuardedJoinHandle<()> {
+impl<T> GuardedJoinHandle<T> {
     pub fn abort(self) {
         self.0.abort();
     }

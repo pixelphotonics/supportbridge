@@ -1,7 +1,6 @@
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
 use std::ops::DerefMut;
-use tokio::task::JoinHandle;
 use tungstenite::Message;
 use util::{spawn_guarded, GuardedJoinHandle};
 
@@ -12,31 +11,6 @@ pub mod protocol;
 pub mod server;
 pub mod util;
 
-pub struct ProxyTasks {
-    pub down_to_up: JoinHandle<Result<()>>,
-    pub up_to_down: JoinHandle<Result<()>>,
-}
-
-impl ProxyTasks {
-    pub fn new(down_to_up: JoinHandle<Result<()>>, up_to_down: JoinHandle<Result<()>>) -> Self {
-        ProxyTasks {
-            down_to_up,
-            up_to_down,
-        }
-    }
-
-    pub async fn join(self) -> Result<()> {
-        self.down_to_up.await??;
-        self.up_to_down.await??;
-
-        Ok(())
-    }
-
-    pub fn abort(self) {
-        self.down_to_up.abort();
-        self.up_to_down.abort();
-    }
-}
 
 pub fn ws_bridge<WSTX, WSRX>(
     mut ws_up_rx: impl DerefMut<Target = WSRX> + Send + 'static,
