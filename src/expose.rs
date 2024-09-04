@@ -69,7 +69,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
             tungstenite::Message::Binary(binmsg) => {
                 if let Some(target_write) = target_write.lock().await.as_mut() {
                     log::debug!("Forwarding message to target, {} bytes", binmsg.len());
-                    target_write.write(&binmsg).await.expect("Failed to write to target");
+                    target_write.write_all(&binmsg).await?;
                 } else {
                     log::warn!("No target socket available. Init message required.");
                 }
