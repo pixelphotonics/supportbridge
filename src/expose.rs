@@ -1,12 +1,12 @@
+use anyhow::Result;
+use futures::{SinkExt, StreamExt};
+use log::{debug, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use futures::{SinkExt, StreamExt};
-use tokio::sync::Mutex;
-use tokio::net::{TcpListener, TcpStream};
-use log::{debug, info};
-use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio::sync::Mutex;
 
 pub struct ClientConnection {
     pub write_half: tokio::net::tcp::OwnedWriteHalf,
@@ -16,7 +16,7 @@ pub struct ClientConnection {
 async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(listen_stream).await?;
     let (mut ws_out, ws_in) = ws_stream.split();
-    
+
     let (ws_send_sender, mut ws_send_receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(1);
 
     // Handle messages on ws_send_receiver

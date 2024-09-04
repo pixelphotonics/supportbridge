@@ -1,6 +1,8 @@
-use std::net::SocketAddr;
-
 use anyhow::Result;
+use core::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
 pub async fn parse_address(address: &str) -> Result<SocketAddr> {
     if let Ok(addr) = address.parse() {
@@ -8,7 +10,10 @@ pub async fn parse_address(address: &str) -> Result<SocketAddr> {
     } else {
         // Try to parse a hostname:port combination
         let mut result = tokio::net::lookup_host(address).await?;
-        let result = result.next().ok_or(anyhow::anyhow!("No address found for hostname: {}", address))?;
+        let result = result.next().ok_or(anyhow::anyhow!(
+            "No address found for hostname: {}",
+            address
+        ))?;
         Ok(result)
     }
 }
@@ -28,7 +33,10 @@ pub fn build_url_base(address: &str, use_tls: bool) -> Result<String> {
     }
 }
 
-pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Result<tungstenite::handshake::client::Request> {
+pub fn build_request(
+    address: &str,
+    command: crate::protocol::ServerPath,
+) -> Result<tungstenite::handshake::client::Request> {
     let parsed_url = if address.starts_with("ws://") || address.starts_with("wss://") {
         url::Url::parse(address)?
     } else {
@@ -42,7 +50,12 @@ pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Res
         format!("{}/{}", base_path, command.to_string())
     };
 
-    log::info!("URL scheme '{}' authority: '{}', path: '{}'", parsed_url.scheme(), parsed_url.authority(), path_and_query);
+    log::info!(
+        "URL scheme '{}' authority: '{}', path: '{}'",
+        parsed_url.scheme(),
+        parsed_url.authority(),
+        path_and_query
+    );
 
     let uri = tungstenite::http::Uri::builder()
         .scheme(parsed_url.scheme())
@@ -62,47 +75,29 @@ pub fn build_request(address: &str, command: crate::protocol::ServerPath) -> Res
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key());
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        );
 
     // use username / password info if available
     let req = if parsed_url.username().len() > 0 || parsed_url.password().is_some() {
         use base64::prelude::*;
-        let auth = format!("{}:{}", parsed_url.username(), parsed_url.password().unwrap_or(""));
+        let auth = format!(
+            "{}:{}",
+            parsed_url.username(),
+            parsed_url.password().unwrap_or("")
+        );
         let auth = format!("Basic {}", BASE64_STANDARD.encode(auth));
         req.header("Authorization", auth)
     } else {
         req
     };
 
-    let req = req
-        .uri(uri)
-        .body(())?;
+    let req = req.uri(uri).body(())?;
 
     Ok(req)
 }
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_request() {
-        let req = build_request("localhost", crate::protocol::ServerPath::List).unwrap();
-        assert_eq!(req.uri().to_string(), "ws://localhost/list");
-
-        let req = build_request("localhost:8080", crate::protocol::ServerPath::List).unwrap();
-        assert_eq!(req.uri().to_string(), "ws://localhost:8080/list");
-
-        let req = build_request("ws://example.com:8080", crate::protocol::ServerPath::List).unwrap();
-        assert_eq!(req.uri().to_string(), "ws://example.com:8080/list");
-    }
-}
-
-
-use core::future::Future;
-use std::pin::Pin;
-use std::task::{Context, Poll};
 
 /// A guarded JoinHandle that cancels the task on drop.
 pub struct GuardedJoinHandle<T>(tokio::task::JoinHandle<T>);
@@ -122,7 +117,7 @@ impl GuardedJoinHandle<()> {
         self.0.abort();
     }
 
-    pub fn abort_handle(&self) -> tokio::task::AbortHandle{
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
         self.0.abort_handle()
     }
 }
@@ -134,10 +129,27 @@ impl<T> Future for GuardedJoinHandle<T> {
     }
 }
 
-
 impl<T> Drop for GuardedJoinHandle<T> {
     fn drop(&mut self) {
         log::trace!("Dropping GuardedJoinHandle");
         self.0.abort();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_request() {
+        let req = build_request("localhost", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://localhost/list");
+
+        let req = build_request("localhost:8080", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://localhost:8080/list");
+
+        let req =
+            build_request("ws://example.com:8080", crate::protocol::ServerPath::List).unwrap();
+        assert_eq!(req.uri().to_string(), "ws://example.com:8080/list");
     }
 }

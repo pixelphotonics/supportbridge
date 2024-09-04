@@ -1,9 +1,7 @@
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
-use tokio::task::JoinHandle;
+use futures::StreamExt;
 
 use crate::{protocol::ServerPath, util::build_request};
-
 
 pub async fn bridge(server_addr: String, peer_name: String, exposed: String) -> Result<()> {
     let cmd = ServerPath::Register { name: peer_name };

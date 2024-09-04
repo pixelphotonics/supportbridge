@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use serde::{Serialize, Deserialize};
-use tungstenite::http::Uri;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use tungstenite::http::Uri;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
@@ -24,37 +24,32 @@ pub struct ExposerInfo {
 }
 
 pub enum ServerPath {
-    Register {
-        name: String,
-    },
-    Connect {
-        name: String,
-    },
+    Register { name: String },
+    Connect { name: String },
     List,
-
     /*/// Free an existing connection and allow a new connection to be opened to the exposed port
     Free {
         name: String,
     },*/
 }
 
-
-
 /// Parse the query string into a HashMap
 fn parse_query(query: &str) -> HashMap<String, String> {
-    query.split('&').filter_map(|pair| {
-        let mut parts = pair.split('=');
-        
-        let key = parts.next();
-        let value = parts.next();
+    query
+        .split('&')
+        .filter_map(|pair| {
+            let mut parts = pair.split('=');
 
-        if key.is_none() || value.is_none() {
-            None
-        } else {
-            Some((key.unwrap().to_string(), value.unwrap().to_string()))
-        }
-        
-    }).collect()
+            let key = parts.next();
+            let value = parts.next();
+
+            if key.is_none() || value.is_none() {
+                None
+            } else {
+                Some((key.unwrap().to_string(), value.unwrap().to_string()))
+            }
+        })
+        .collect()
 }
 
 impl ServerPath {
@@ -67,19 +62,13 @@ impl ServerPath {
         match path {
             "/register" => {
                 let name = query.get("name").ok_or(anyhow::anyhow!("Name not found"))?;
-                Ok(ServerPath::Register {
-                    name: name.clone(),
-                })
-            },
+                Ok(ServerPath::Register { name: name.clone() })
+            }
             "/connect" => {
                 let name = query.get("name").ok_or(anyhow::anyhow!("Name not found"))?;
-                Ok(ServerPath::Connect {
-                    name: name.clone(),
-                })
-            },
-            "/list" => {
-                Ok(ServerPath::List)
-            },
+                Ok(ServerPath::Connect { name: name.clone() })
+            }
+            "/list" => Ok(ServerPath::List),
             _ => Err(anyhow::anyhow!("Unknown path: {}", path)),
         }
     }
@@ -88,13 +77,11 @@ impl ServerPath {
         match self {
             ServerPath::Register { name } => {
                 format!("register?name={}", name)
-            },
+            }
             ServerPath::Connect { name } => {
                 format!("connect?name={}", name)
-            },
-            ServerPath::List => {
-                "list".to_string()
-            },
+            }
+            ServerPath::List => "list".to_string(),
         }
     }
 }

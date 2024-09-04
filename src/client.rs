@@ -1,15 +1,12 @@
+use crate::util::{spawn_guarded, GuardedJoinHandle};
+use anyhow::Result;
+use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::ops::DerefMut;
-use std::sync::Arc;
-use futures::{SinkExt, StreamExt};
-use tokio::sync::Mutex;
-use tokio::net::{TcpListener, TcpStream};
-use log::{debug, info};
-use anyhow::Result;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tungstenite::Message;
-use crate::util::{spawn_guarded, GuardedJoinHandle};
 
 pub struct Client {
     pub target_addr: core::net::SocketAddr,
@@ -24,19 +21,21 @@ pub struct ClientConnection {
     pub close_sender: oneshot::Sender<()>,
 }
 
-
-
-
-pub fn tcp_to_ws<WSTX, WSRX> (
+pub fn tcp_to_ws<WSTX, WSRX>(
     tcp_stream: TcpStream,
     mut ws_in: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_out: impl DerefMut<Target = WSTX> + Send + 'static,
-) -> Result<(GuardedJoinHandle<Result<()>>, GuardedJoinHandle<Result<()>>)> 
+) -> Result<(GuardedJoinHandle<Result<()>>, GuardedJoinHandle<Result<()>>)>
 where
-    WSTX: futures::sink::Sink<Message, Error=tungstenite::error::Error> + std::marker::Unpin + std::marker::Send + 'static,
-    WSRX: futures::stream::Stream<Item=std::result::Result<Message, tungstenite::error::Error>> + std::marker::Unpin + std::marker::Send + 'static,
+    WSTX: futures::sink::Sink<Message, Error = tungstenite::error::Error>
+        + std::marker::Unpin
+        + std::marker::Send
+        + 'static,
+    WSRX: futures::stream::Stream<Item = std::result::Result<Message, tungstenite::error::Error>>
+        + std::marker::Unpin
+        + std::marker::Send
+        + 'static,
 {
-
     let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
 
     // Relay all messages from server to exposer and vice versa
@@ -63,39 +62,42 @@ where
             }
 
             log::debug!("TCP->WS: {} bytes", n);
-            ws_out.send(tungstenite::Message::Binary(buf[..n].to_vec())).await?;
+            ws_out
+                .send(tungstenite::Message::Binary(buf[..n].to_vec()))
+                .await?;
         }
 
         Ok(())
     });
 
     Ok((tcp_to_ws, ws_to_tcp))
-
 }
 
-
-async fn handle_connection(listen_stream: TcpStream, ws_server: String, name: String) -> Result<()> {
+async fn handle_connection(
+    listen_stream: TcpStream,
+    ws_server: String,
+    name: String,
+) -> Result<()> {
     let cmd = crate::protocol::ServerPath::Connect { name };
     let request = crate::util::build_request(&ws_server, cmd)?;
     let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
     let (ws_out, ws_in) = ws_server_stream.split();
 
     let (task1, task2) = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;
-    task1.await?;
-    task2.await?;
+    task1.await??;
+    task2.await??;
     //bridge.join().await?;
 
     Ok(())
 }
 
 pub async fn serve(tcp_bind: SocketAddr, ws_server: String, name: String) -> Result<()> {
-
     let listener = TcpListener::bind(tcp_bind).await?;
-    info!("Listening on {}", tcp_bind);
+    log::info!("Listening on {}", tcp_bind);
 
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
-        info!("Peer address: {}", peer);
+        log::info!("Peer address: {}", peer);
 
         let ws_server = ws_server.clone();
         let name = name.clone();
@@ -104,7 +106,7 @@ pub async fn serve(tcp_bind: SocketAddr, ws_server: String, name: String) -> Res
             match handle_connection(stream, ws_server, name).await {
                 Ok(_) => {
                     log::info!("Connection closed: {}", peer);
-                },
+                }
                 Err(e) => {
                     log::error!("Connection error: {:?}", e);
                 }
