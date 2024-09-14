@@ -54,8 +54,8 @@ enum Command {
         address: String,
     },
 
-    /// Connect to a server and bind a local TCP port.
-    Connect {
+    /// Open a local TCP port which maps to an exposer <name> via the supportbridge <server>.
+    Open {
         /// The Ip address:port combination to listen on.
         #[clap(long, default_value = "[::]:8083")]
         bind: SocketAddr,
@@ -66,7 +66,7 @@ enum Command {
         ///
         /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
         /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
-        server_addr: String,
+        server: String,
 
         /// Name of the exposed machine
         name: String,
@@ -137,13 +137,13 @@ async fn main() -> anyhow::Result<()> {
 
             expose::serve(bind, util::parse_address(&address).await?).await?;
         }
-        Command::Connect {
+        Command::Open {
             bind,
-            server_addr,
+            server,
             name,
         } => {
             use supportbridge::client;
-            client::serve(bind, server_addr, name).await?;
+            client::serve(bind, server, name).await?;
         }
         Command::Relay {
             exposed_addr,

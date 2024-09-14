@@ -51,7 +51,7 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
                                 if n == 0 {
                                     break;
                                 }
-                    
+
                                 log::debug!("TCP->WS: {} bytes", n);
                                 ws_out_lock
                                     .send(tungstenite::Message::Binary(buf[..n].to_vec()))
