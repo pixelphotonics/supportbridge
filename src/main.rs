@@ -1,7 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::net::SocketAddr;
-use supportbridge::util;
-use util::build_url_base;
+use supportbridge::util::{self, parse_bind_address};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -14,9 +12,9 @@ struct Cli {
 enum Command {
     /// Run the central (public) server
     Serve {
-        /// The Ip address:port combination to listen on.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
         #[clap(long, default_value = "[::]:8081")]
-        bind: SocketAddr,
+        bind: String,
 
         /// Don't overwrite existing channels when a new exposer connection is made with the same name.
         /// By default, the server will close the existing connection to the exposer and allow the new exposer to take its place.
@@ -46,19 +44,19 @@ enum Command {
 
     /// Run the websocket-to-TCP bridge
     Expose {
-        /// The Ip address:port combination to listen on.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
         #[clap(long, default_value = "[::]:8082")]
-        bind: SocketAddr,
+        bind: String,
 
         /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
-        address: String,
+        target: String,
     },
 
     /// Open a local TCP port which maps to an exposer <name> via the supportbridge <server>.
     Open {
-        /// The Ip address:port combination to listen on.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
         #[clap(long, default_value = "[::]:8083")]
-        bind: SocketAddr,
+        bind: String,
 
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
         /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
@@ -85,7 +83,7 @@ enum Command {
         /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server: String,
 
-        /// Name of the exposed machine
+        /// The exposed machine will be registered with the server under the given name.
         name: String,
     },
 
@@ -123,7 +121,7 @@ async fn main() -> anyhow::Result<()> {
             use supportbridge::server;
 
             let server_options = server::ServerOptions {
-                listen_addr: bind,
+                listen_addr: parse_bind_address(&bind)?,
                 open_port: open_ports,
                 port_range: min_port..=max_port,
                 overwrite_existing_connection: !dont_overwrite_connection,
@@ -132,10 +130,11 @@ async fn main() -> anyhow::Result<()> {
 
             server::serve(server_options).await?;
         }
-        Command::Expose { bind, address } => {
+        Command::Expose { bind, target } => {
             use supportbridge::expose;
 
-            expose::serve(bind, util::parse_address(&address).await?).await?;
+
+            expose::serve(parse_bind_address(&bind)?, util::parse_address(&target).await?).await?;
         }
         Command::Open {
             bind,
@@ -143,7 +142,7 @@ async fn main() -> anyhow::Result<()> {
             name,
         } => {
             use supportbridge::client;
-            client::serve(bind, server, name).await?;
+            client::serve(parse_bind_address(&bind)?, server, name).await?;
         }
         Command::Relay {
             exposed_addr,
@@ -158,8 +157,8 @@ async fn main() -> anyhow::Result<()> {
             verbose,
         } => {
             use futures::StreamExt;
-            let server_addr = format!("{}list", build_url_base(&server_addr, false)?);
-            let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(&server_addr).await?;
+            let request = util::build_request(&server_addr, supportbridge::protocol::ServerPath::List)?;
+            let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
 
             while let Some(msg) = ws_server_stream.next().await {
                 let msg = msg?;

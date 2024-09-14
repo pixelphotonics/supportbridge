@@ -4,9 +4,18 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+pub fn parse_bind_address(address: &str) -> Result<SocketAddr> {
+    // First, try to parse only a port number. If so, assume localhost
+    if let Ok(port) = address.parse() {
+        Ok(SocketAddr::from(([0, 0, 0, 0], port)))
+    } else {
+        Ok(address.parse()?)
+    }
+}
+
 pub async fn parse_address(address: &str) -> Result<SocketAddr> {
     if let Ok(addr) = address.parse() {
-        return Ok(addr);
+        Ok(addr)
     } else {
         // Try to parse a hostname:port combination
         let mut result = tokio::net::lookup_host(address).await?;
@@ -15,21 +24,6 @@ pub async fn parse_address(address: &str) -> Result<SocketAddr> {
             address
         ))?;
         Ok(result)
-    }
-}
-
-pub fn build_url_base(address: &str, use_tls: bool) -> Result<String> {
-    let address: String = if address.starts_with("ws://") || address.starts_with("wss://") {
-        address.to_string()
-    } else {
-        let scheme = if use_tls { "wss" } else { "ws" };
-        format!("{}://{}", scheme, address)
-    };
-
-    if address.ends_with('/') {
-        Ok(address)
-    } else {
-        Ok(format!("{}/", address))
     }
 }
 
