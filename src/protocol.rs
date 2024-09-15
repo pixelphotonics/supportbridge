@@ -43,10 +43,10 @@ fn parse_query(query: &str) -> HashMap<String, String> {
             let key = parts.next();
             let value = parts.next();
 
-            if key.is_none() || value.is_none() {
-                None
+            if let Some((k, v)) = key.zip(value) {
+                Some((k.to_string(), v.to_string()))
             } else {
-                Some((key.unwrap().to_string(), value.unwrap().to_string()))
+                None
             }
         })
         .collect()
@@ -72,16 +72,21 @@ impl ServerPath {
             _ => Err(anyhow::anyhow!("Unknown path: {}", path)),
         }
     }
+}
 
-    pub fn to_string(&self) -> String {
+
+impl std::fmt::Display for ServerPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerPath::Register { name } => {
-                format!("register?name={}", name)
+                write!(f, "register?name={}", name)
             }
             ServerPath::Connect { name } => {
-                format!("connect?name={}", name)
+                write!(f, "connect?name={}", name)
             }
-            ServerPath::List => "list".to_string(),
+            ServerPath::List => {
+                write!(f, "list")
+            },
         }
     }
 }
