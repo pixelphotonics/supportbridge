@@ -12,7 +12,7 @@ struct Cli {
 enum Command {
     /// Run the central (public) server
     Serve {
-        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
         #[clap(long, default_value = "[::]:8081")]
         bind: String,
 
@@ -44,17 +44,22 @@ enum Command {
 
     /// Run the websocket-to-TCP bridge
     Expose {
-        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
         #[clap(long, default_value = "[::]:8082")]
         bind: String,
 
         /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
         target: String,
+
+        /// Optionally, the address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        /// If this is passed, the exposer will register itself with the server instead of listening for websocket connections.
+        #[arg(short = 's', long)]
+        server: Option<String>,
     },
 
     /// Open a local TCP port which maps to an exposer <name> via the supportbridge <server>.
     Open {
-        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on localhost.
+        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
         #[clap(long, default_value = "[::]:8083")]
         bind: String,
 
@@ -130,10 +135,10 @@ async fn main() -> anyhow::Result<()> {
 
             server::serve(server_options).await?;
         }
-        Command::Expose { bind, target } => {
+        Command::Expose { bind, target, server } => {
             use supportbridge::expose;
 
-
+            // todo: implement server registration
             expose::serve(parse_bind_address(&bind)?, util::parse_address(&target).await?).await?;
         }
         Command::Open {
