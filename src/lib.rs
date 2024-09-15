@@ -13,10 +13,23 @@ pub mod protocol;
 pub mod server;
 pub mod util;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-//use tokio::sync::mpsc::
 
 pub type WsError = tungstenite::error::Error;
 pub type WsResult = std::result::Result<Message, WsError>;
+
+pub trait WriteBinary {
+    fn write_binary(&mut self, data: &[u8]) -> impl std::future::Future<Output = Result<()>> + std::marker::Send;
+}
+
+impl<T> WriteBinary for T
+where
+    T: AsyncWrite + Unpin + std::marker::Send,
+{
+    async fn write_binary(&mut self, data: &[u8]) -> Result<()> {
+        self.write_all(data).await?;
+        Ok(())
+    }
+}
 
 
 /// Take a websocket stream and relay all binary messages from the websocket
@@ -28,7 +41,7 @@ pub fn ws_to_tcp<WsRx, TcpTx, TxtRx, TxtErr>(
 ) -> GuardedJoinHandle<Result<()>>
 where
     WsRx: Stream<Item = WsResult> + Unpin + Send + 'static,
-    TcpTx: AsyncWrite + Unpin + Send + 'static,
+    TcpTx: WriteBinary + Unpin + Send + 'static,
     TxtRx: Sink<String, Error = TxtErr> + Unpin + Send + 'static,
     TxtErr: Error + Send + Sync + 'static,
 {
@@ -44,7 +57,7 @@ where
                 },
                 tungstenite::Message::Binary(binmsg) => {
                     log::trace!("WS->TCP: {} bytes", binmsg.len());
-                    tcp_out.write_all(&binmsg).await?;
+                    tcp_out.write_binary(&binmsg).await?;
                 }
                 tungstenite::Message::Close(_) => {
                     log::debug!("WS->TCP: Close message received");
