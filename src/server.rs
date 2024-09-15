@@ -291,15 +291,12 @@ async fn handle_connection(
                         .send(tungstenite::Message::Text("init".into()))
                         .await?;
 
-                    let (task1, task2) = crate::ws_bridge(
+                    crate::ws_bridge(
                         ws_in.lock_owned().await,
                         ws_out,
                         Box::new(client_read),
                         Box::new(client_write),
-                    )?;
-
-                    task1.await??;
-                    task2.await??;
+                    ).await?;
 
                     Ok(())
                 });

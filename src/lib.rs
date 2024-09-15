@@ -88,12 +88,12 @@ where
 }
 
 
-pub fn ws_bridge<WSTX, WSRX>(
+pub async fn ws_bridge<WSTX, WSRX>(
     mut ws_up_rx: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_up_tx: impl DerefMut<Target = WSTX> + Send + 'static,
     mut ws_down_rx: impl DerefMut<Target = WSRX> + Send + 'static,
     mut ws_down_tx: impl DerefMut<Target = WSTX> + Send + 'static,
-) -> Result<(GuardedJoinHandle<Result<()>>, GuardedJoinHandle<Result<()>>)>
+) -> Result<()>
 where
     WSTX: Sink<Message, Error = tungstenite::error::Error>
         + Unpin
@@ -124,5 +124,8 @@ where
         Ok(())
     });
 
-    Ok((down_to_up, up_to_down))
+    down_to_up.await??;
+    up_to_down.await??;
+
+    Ok(())
 }
