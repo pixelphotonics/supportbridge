@@ -55,6 +55,10 @@ enum Command {
         /// If this is passed, the exposer will register itself with the server instead of listening for websocket connections.
         #[arg(short = 's', long)]
         server: Option<String>,
+
+        /// Name of the exposed machine to register on the server. If not given, the system hostname will be used.
+        #[arg(short = 'n', long)]
+        name: Option<String>,
     },
 
     /// Open a local TCP port which maps to an exposer <name> via the supportbridge <server>.
@@ -135,11 +139,22 @@ async fn main() -> anyhow::Result<()> {
 
             server::serve(server_options).await?;
         }
-        Command::Expose { bind, target, server } => {
+        Command::Expose { bind, target, server, name } => {
             use supportbridge::expose;
 
-            // todo: implement server registration
-            expose::serve(parse_bind_address(&bind)?, util::parse_address(&target).await?).await?;
+            let target_addr = util::parse_address(&target).await?;
+
+            if let Some(server) = server {
+                let name = match name {
+                    Some(name) => name,
+                    None => hostname::get()?.into_string().unwrap_or_else(|_| "unknown".to_string()),
+                };
+                
+                expose::connect_to_server(server, target_addr, name).await?;
+                return Ok(());
+            } else {
+                expose::listen_to_ws(parse_bind_address(&bind)?, target_addr).await?;
+            }            
         }
         Command::Open {
             bind,
@@ -155,7 +170,7 @@ async fn main() -> anyhow::Result<()> {
             name,
         } => {
             use supportbridge::bridge;
-            bridge::bridge(server, name, exposed_addr.try_into()?).await?;
+            bridge::bridge(server, name, exposed_addr).await?;
         }
         Command::List {
             server_addr,
@@ -215,7 +230,7 @@ async fn main() -> anyhow::Result<()> {
                                 let mut tw = tabwriter::TabWriter::new(std::io::stdout());
                                 tw.write_all(table.join("\n").as_bytes())?;
                                 tw.flush()?;
-                                println!("")
+                                println!("\n");
                             }
 
                             #[cfg(not(feature = "tabwriter"))]

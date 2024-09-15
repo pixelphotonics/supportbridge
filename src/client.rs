@@ -73,20 +73,27 @@ where
     Ok((tcp_to_ws, ws_to_tcp))
 }
 
+pub async fn register_with_server(
+    ws_server: String,
+    name: String,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+    let cmd = crate::protocol::ServerPath::Connect { name };
+    let request = crate::util::build_request(&ws_server, cmd)?;
+    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    Ok(ws_server_stream)
+}
+
 async fn handle_connection(
     listen_stream: TcpStream,
     ws_server: String,
     name: String,
 ) -> Result<()> {
-    let cmd = crate::protocol::ServerPath::Connect { name };
-    let request = crate::util::build_request(&ws_server, cmd)?;
-    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    let ws_server_stream = register_with_server(ws_server, name).await?;
     let (ws_out, ws_in) = ws_server_stream.split();
 
     let (task1, task2) = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;
     task1.await??;
     task2.await??;
-    //bridge.join().await?;
 
     Ok(())
 }

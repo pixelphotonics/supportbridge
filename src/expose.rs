@@ -1,17 +1,27 @@
 use anyhow::Result;
-use futures::{SinkExt, StreamExt};
+use futures::{Sink, SinkExt, Stream, StreamExt};
 use log::{debug, info};
+use tungstenite::Message;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 
+type WsError = tungstenite::error::Error;
+type WsResult = std::result::Result<Message, WsError>;
+
+use crate::client::register_with_server;
 use crate::util::{spawn_guarded, GuardedJoinHandle};
 
 
-async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) -> Result<()> {
-    let ws_stream = tokio_tungstenite::accept_async(listen_stream).await?;
+async fn handle_connection<WS>(ws_stream: WS, target_addr: SocketAddr) -> Result<()>
+where 
+    WS: Sink<Message, Error = WsError>
+        + Stream<Item = WsResult>
+        + std::marker::Send
+        + 'static
+{
     let (ws_out, mut ws_in) = ws_stream.split();
 
     let ws_out_mut = Arc::new(Mutex::new(ws_out));
@@ -84,16 +94,28 @@ async fn handle_connection(listen_stream: TcpStream, target_addr: SocketAddr) ->
     Ok(())
 }
 
-pub async fn serve(bind: SocketAddr, tcp_addr: SocketAddr) -> Result<()> {
+/// Listen on the given bind address and expose the target_addr via a websocket connection.
+/// In order to connect the exposer with the server, a third-party relay needs to be used.
+pub async fn listen_to_ws(bind: SocketAddr, target_addr: SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    info!("Exposing {} to {}", tcp_addr, bind);
+    info!("Exposing {} to {}", target_addr, bind);
 
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
         info!("Peer address: {}", peer);
+        let ws_stream = tokio_tungstenite::accept_async(stream).await?;
 
-        tokio::spawn(handle_connection(stream, tcp_addr));
+        tokio::spawn(handle_connection(ws_stream, target_addr));
     }
+
+    Ok(())
+}
+
+/// Expose the target_addr and directly connect to the server and register this exposer under the given name.
+/// This can be used as long as the exposer can directly connect to the server and is not within a protected network.
+pub async fn connect_to_server(ws_server: String, target_addr: SocketAddr, name: String) -> Result<()> {
+    let ws_stream = register_with_server(ws_server, name).await?;
+    handle_connection(ws_stream, target_addr).await?;
 
     Ok(())
 }
