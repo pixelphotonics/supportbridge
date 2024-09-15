@@ -52,25 +52,10 @@ where
                         // Create new socket connection
                         let new_socket = TcpStream::connect(target_addr).await.unwrap();
                         debug!("Open socket to target: {}", target_addr);
-                        let (mut target_read, target_write_half) = new_socket.into_split();
+                        let (target_read, target_write_half) = new_socket.into_split();
                         tcp_out_lock.replace(target_write_half);
 
-                        task_tcp_to_ws = Some(spawn_guarded(async move {
-                            loop {
-                                let mut buf = vec![0; 1024];
-                                let n = target_read.read(buf.as_mut_slice()).await?;
-                                if n == 0 {
-                                    break;
-                                }
-
-                                log::debug!("TCP->WS: {} bytes", n);
-                                ws_out_lock
-                                    .send(tungstenite::Message::Binary(buf[..n].to_vec()))
-                                    .await?;
-                            }
-
-                            Ok(())
-                        }));
+                        task_tcp_to_ws = Some(crate::tcp_to_ws(target_read, ws_out_lock));
                     },
                     _ => {
                         log::warn!("Unknown message: {}",textmsg);

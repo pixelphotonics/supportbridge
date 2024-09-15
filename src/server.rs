@@ -9,7 +9,6 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tungstenite::http::Uri;
 
-use crate::client::tcp_to_ws;
 use crate::protocol::{ClientInfo, ExposerInfo, ServerPath};
 use crate::util::{spawn_guarded, GuardedJoinHandle};
 
@@ -195,11 +194,14 @@ async fn open_connection_port(
                 .send(tungstenite::Message::Text("init".into()))
                 .await?;
 
-            let (task_1, task_2) = tcp_to_ws(stream, ws_in.lock_owned().await, ws_out)?;
-            log::debug!("open_connection_port1");
-            task_1.await??;
-            task_2.await??;
-            log::debug!("open_connection_port2");
+
+            let (tcp_read, tcp_write) = stream.into_split();
+            
+            let task_tcp_to_ws = crate::tcp_to_ws(tcp_read, ws_out);
+            let task_ws_to_tcp = crate::ws_to_tcp(ws_in.lock_owned().await, tcp_write, None::<Vec<String>>);
+
+            task_tcp_to_ws.await??;
+            task_ws_to_tcp.await??;
             Ok(())
         });
 
