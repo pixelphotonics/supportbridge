@@ -16,15 +16,14 @@ The tunnel is established with the help of a publicly reachable **server**.
 
 ## Sub commands
 
-* `serve [<bind_addr>]`: publicly reachable websocket server that manages a list of connected exposers.
+* `supportbridge serve [<bind_addr_or_port>]`: publicly reachable websocket server that manages a list of connected exposers.
   
   If run with `--open-ports`, it will expose one TCP port on the server that maps directly to each connected exposer. In this case, a connection to the exposer can be made by directly connecting to the opened port on the server.
   If omitted, a connection to the exposer via the server can be made by running `supportbridge open`, which will locally open a TCP port which maps to an exposer port.
 
-* `expose`: open a supportbridge port (websocket, default: 8082) and forward all traffic to a specified exposed port. Does not connect to the server, but relies on a relay to make the connection between server and exposer unless the `--server` option is specified.
+* `supportbridge expose [<bind_addr_or_port>] [--server=<server_addr>] <target>`: Expose the `<target>` host:port via a supportbridge tunnel. If `<bind_addr_or_port>` is passed, a local port will be opened to which a supportbridge relay can connect and all traffic will be redirected to the target. If instead the `--server` option is specified, the exposed port is directly registered with the server so no relay is needed.
 
-
-* `relay <exposer> <server> <name>`: Registers the specified `<exposer>` with the `<server>` using the given `<name>` and forwards all traffic between them.
+* `supportbridge relay <exposer> <server> <name>`: Registers the specified `<exposer>` with the `<server>` using the given `<name>` and forwards all traffic between them.
 
 
 ## Example

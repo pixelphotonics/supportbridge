@@ -1,3 +1,34 @@
+//! Protocol definitions for the server and client
+//! 
+//! The protocol is kept very simple and relies on websockets for communication.
+//! 
+//! The communication with the server is done via HTTP GET requests with the following paths:
+//!     
+//!  - `/register?name=<name>`: Register a new exposer with the given name
+//!  - `/connect?name=<name>`: Connect to an existing exposer with the given name
+//!  - `/list`: List all currently registered exposer
+//! 
+//! This allows to implement authorization using a reverse proxy based on the different paths.
+//! For example, the `/connect` path could be protected by a password, while the `/register`
+//! path is open to everyone (e.g. customers can connect to the exposer, but only the service
+//! engineer who needs to provide remote support can connect to the registered customers).
+//! 
+//! The typical communication flow is as follows:
+//! 
+//! * The exposer connects to the server (`/register?name=<name>`) and registers itself
+//!   with a name. The server keeps the websocket connection open and waits for incoming
+//!   connections.
+//! * Clients can now connect to the server either through an opened port (if the server was
+//!   started with the `--open_ports` option), or via a websocket connection on the
+//!   path `/connect?name=<name>`.
+//! * As soon as a client initiates a connection, the server sends `init` as websocket text
+//!   message to the exposer, indicating that an existing connection should
+//!   be closed and a new connection to the target needs to be established. The exposer
+//!   answers with an `ack` text message.
+//! * After this, all binary messages from the client are forwarded to the exposer (which
+//!   forwards them to the target TCP connection) and vice versa.
+//! 
+
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -27,10 +58,6 @@ pub enum ServerPath {
     Register { name: String },
     Connect { name: String },
     List,
-    /*/// Free an existing connection and allow a new connection to be opened to the exposed port
-    Free {
-        name: String,
-    },*/
 }
 
 /// Parse the query string into a HashMap

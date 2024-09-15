@@ -150,7 +150,7 @@ async fn main() -> anyhow::Result<()> {
                     None => hostname::get()?.into_string().unwrap_or_else(|_| "unknown".to_string()),
                 };
                 
-                expose::connect_to_server(server, target_addr, name).await?;
+                expose::expose_and_register(server, target_addr, name).await?;
                 return Ok(());
             } else {
                 expose::listen_to_ws(parse_bind_address(&bind)?, target_addr).await?;

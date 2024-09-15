@@ -1,13 +1,10 @@
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::{protocol::ServerPath, util::build_request};
+use crate::{client::connect_to_server, protocol::ServerPath};
 
 pub async fn bridge(server_addr: String, peer_name: String, exposed: String) -> Result<()> {
-    let cmd = ServerPath::Register { name: peer_name };
-    let request = build_request(&server_addr, cmd)?;
-
-    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    let ws_server_stream = connect_to_server(server_addr.clone(), ServerPath::Register { name: peer_name }).await?;
     log::info!("Connected to server: {}", server_addr);
 
     let exposed_addr = format!("ws://{}", exposed);

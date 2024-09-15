@@ -1,3 +1,4 @@
+use crate::protocol::ServerPath;
 use crate::util::{spawn_guarded, GuardedJoinHandle};
 use anyhow::Result;
 use futures::{SinkExt, StreamExt};
@@ -73,11 +74,12 @@ where
     Ok((tcp_to_ws, ws_to_tcp))
 }
 
-pub async fn register_with_server(
+
+
+pub async fn connect_to_server(
     ws_server: String,
-    name: String,
+    cmd: ServerPath,
 ) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
-    let cmd = crate::protocol::ServerPath::Connect { name };
     let request = crate::util::build_request(&ws_server, cmd)?;
     let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
     Ok(ws_server_stream)
@@ -88,7 +90,7 @@ async fn handle_connection(
     ws_server: String,
     name: String,
 ) -> Result<()> {
-    let ws_server_stream = register_with_server(ws_server, name).await?;
+    let ws_server_stream = connect_to_server(ws_server, ServerPath::Connect { name }).await?;
     let (ws_out, ws_in) = ws_server_stream.split();
 
     let (task1, task2) = tcp_to_ws(listen_stream, Box::new(ws_in), Box::new(ws_out))?;

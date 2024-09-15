@@ -11,7 +11,8 @@ use tokio::sync::Mutex;
 type WsError = tungstenite::error::Error;
 type WsResult = std::result::Result<Message, WsError>;
 
-use crate::client::register_with_server;
+use crate::client::connect_to_server;
+use crate::protocol::ServerPath;
 use crate::util::{spawn_guarded, GuardedJoinHandle};
 
 
@@ -113,8 +114,8 @@ pub async fn listen_to_ws(bind: SocketAddr, target_addr: SocketAddr) -> Result<(
 
 /// Expose the target_addr and directly connect to the server and register this exposer under the given name.
 /// This can be used as long as the exposer can directly connect to the server and is not within a protected network.
-pub async fn connect_to_server(ws_server: String, target_addr: SocketAddr, name: String) -> Result<()> {
-    let ws_stream = register_with_server(ws_server, name).await?;
+pub async fn expose_and_register(ws_server: String, target_addr: SocketAddr, name: String) -> Result<()> {
+    let ws_stream = connect_to_server(ws_server, ServerPath::Register { name }).await?;
     handle_connection(ws_stream, target_addr).await?;
 
     Ok(())
