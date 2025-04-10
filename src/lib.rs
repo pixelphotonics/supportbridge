@@ -1,6 +1,7 @@
 use anyhow::Result;
 use futures::{stream::Stream, Sink, SinkExt, StreamExt};
-use std::error::Error;
+use protocol::{BinaryMessage, ChannelId};
+use std::{error::Error, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::{marker::{Send, Unpin}, ops::DerefMut};
 use tungstenite::Message;
@@ -93,6 +94,41 @@ where
             log::debug!("TCP->WS: {} bytes", n);
             tx_ws
                 .send(tungstenite::Message::Binary(buf[..n].to_vec()))
+                .await?;
+        }
+
+        Ok(())
+    })
+}
+
+
+/// Take a TCP stream and relay all binary messages from the TCP stream
+/// to the websocket stream using the custom protocol.
+pub fn tcp_to_ws_encoded<TRx, WTx>(
+    channel_id: ChannelId,
+    mut rx_tcp: TRx,
+    mut tx_ws: Arc<tokio::sync::Mutex<WTx>>,
+) -> GuardedJoinHandle<Result<()>>
+where
+    TRx: AsyncRead + Unpin  + Send + 'static,
+    WTx: Sink<Message, Error = WsError>  + Unpin + Send + 'static,
+{
+    spawn_guarded(async move {
+        log::debug!("Starting TCP->WS relay");
+        loop {
+            let mut buf = vec![0; 1024];
+            let n = rx_tcp.read(buf.as_mut_slice()).await?;
+            if n == 0 {
+                break;
+            }
+
+            let msg = BinaryMessage::encode_ws(channel_id, &buf[..n]);
+
+            log::debug!("TCP->WS: {} bytes", n);
+            tx_ws
+                .lock()
+                .await
+                .send(msg)
                 .await?;
         }
 

@@ -2,6 +2,13 @@
 //! 
 //! The protocol is kept very simple and relies on websockets for communication.
 //! 
+//! The exchange between exposer, server and client is done using small JSON messages. The
+//! message types are encoded in the `JsonMessage` enum and the type is tagged with the `type`
+//! field. The messages are serialized using `serde_json` and sent as text messages over the
+//! websocket connection.
+//!  
+//! 
+//! 
 //! The communication with the server is done via HTTP GET requests with the following paths:
 //!     
 //!  - `/register?name=<name>`: Register a new exposer with the given name
@@ -35,6 +42,71 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tungstenite::http::Uri;
 
+pub type ChannelId = u8;
+
+/// Message sent between client and exposer.
+/// As a websocket message, this is just the channel id (single byte) followed by the data.
+pub struct BinaryMessage<'a> {
+    pub channel_id: ChannelId,
+    pub data: &'a [u8],
+}
+
+impl<'a> BinaryMessage<'a> {
+    pub fn encode_ws(channel_id: ChannelId, data: &[u8]) -> tungstenite::Message {
+        let mut out_buf = Vec::with_capacity(data.len() + 1);
+        out_buf.push(channel_id);
+        out_buf.extend_from_slice(data);
+        tungstenite::Message::Binary(out_buf)
+    }
+
+    pub fn from_ws(in_data: &'a [u8]) -> Option<Self> {
+        if in_data.len() > 1 {
+            Some (Self {
+                channel_id: in_data[0],
+                data: &in_data[1..]
+            })
+        } else {
+            None
+        }
+    }
+}
+
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum JsonMessage {
+    /// Open a new channel. Sent from client to exposer.
+    Open {
+        /// The port on the exposer to connect to.
+        target_port: u16,
+
+        /// The target host name. If not specified, this defaults to localhost (from the point of the exposer).
+        target_address: Option<String>,
+
+        /// If the exposer runs out of channel ids, if this option is passed, the exposer will try to free
+        /// old connections.
+        force: Option<bool>,
+    },
+
+    /// A new channel was initialized and the given id was assigned.
+    OpenSuccessful {
+        channel_id: ChannelId,
+    },
+
+    /// Channel Error
+    Error {
+        message: String,
+    },
+}
+
+impl JsonMessage {
+    pub fn encode_ws(&self) -> tungstenite::Message {
+        let msg = serde_json::to_string(self).unwrap();
+        tungstenite::Message::Text(msg)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
     pub peer_addr: String,
@@ -52,6 +124,17 @@ pub struct ExposerInfo {
 
     /// The name of the connected client
     pub connected_client: Option<ClientInfo>,
+}
+
+pub struct ChannelInfo {
+
+    pub id: ChannelId,
+
+    /// The exposed port on the exposer
+    pub port: u16,
+
+    /// The target address (from the POV of the exposer).
+    pub address: String,
 }
 
 pub enum ServerPath {

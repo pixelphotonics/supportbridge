@@ -9,7 +9,7 @@ The tunnel is established with the help of a publicly reachable **server**.
 * Due to the use of websockets for the tunnel, a relay can run fully in a web browser.
 * Simple protocol and implementation in 500 lines of safe rust
 * Only allows a single connection to an exposer at a time. Opening a new connection will close the old one.
-* Authentication authorization and encryption is left to inner layers. If the server is publicly reachable, it is recommended to put it behind a reverse proxy with proper SSL and let the reverse proxy handle authentication.
+* Authentication, authorization and encryption is left to inner layers. If the server is publicly reachable, it is recommended to put it behind a reverse proxy with proper SSL and let the reverse proxy handle authentication.
 * Ideal for tunneling a SSH connection, which allows to expose additional ports on the target.
 
 
