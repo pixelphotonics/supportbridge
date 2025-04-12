@@ -32,7 +32,7 @@ async fn handle_connection(
     Ok(())
 }
 
-pub async fn serve(tcp_bind: SocketAddr, ws_server: String, name: String) -> Result<()> {
+pub async fn serve(tcp_bind: SocketAddr, ws_server: String, name: String, target_address: Option<String>, target_port: u16) -> Result<()> {
     let listener = TcpListener::bind(tcp_bind).await?;
     log::info!("Listening on {}", tcp_bind);
 

@@ -71,22 +71,45 @@ impl<'a> BinaryMessage<'a> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposedAddress {
+    pub address: String,
+    pub port: u16,
+}
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum JsonMessage {
-    /// Open a new channel. Sent from client to exposer.
-    Open {
-        /// The port on the exposer to connect to.
-        target_port: u16,
+    /// Initiate a new tunnel connection. This is sent from the server to the exposer
+    /// once in the beginning.
+    /// The exposer will respond etierh with `OpenTunnelSuccess` or `Error`.
+    OpenTunnel {
+        
+    },
 
-        /// The target host name. If not specified, this defaults to localhost (from the point of the exposer).
-        target_address: Option<String>,
+    /// A new tunnel was opened. This is sent from the exposer to the server.
+    OpenTunnelSuccess {
+        exposed: Vec<ExposedAddress>,
+    },
+
+    /// Open a new channel. Sent from server to exposer.
+    Open {
+        /// The channel id as assigned by the server.
+        channel_id: ChannelId,
+
+        /// The port on the exposer to connect to.
+        exposed_address: ExposedAddress,
 
         /// If the exposer runs out of channel ids, if this option is passed, the exposer will try to free
         /// old connections.
         force: Option<bool>,
+    },
+
+    /// This message is sent when a channel is closed. This can be sent by the exposer or the server.
+    CloseChannel {
+        /// The channel id to close.
+        channel_id: ChannelId,
     },
 
     /// A new channel was initialized and the given id was assigned.
@@ -137,6 +160,7 @@ pub struct ChannelInfo {
     pub address: String,
 }
 
+#[derive(Debug)]
 pub enum ServerPath {
     Register { name: String },
     Connect { name: String },

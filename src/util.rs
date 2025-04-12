@@ -116,6 +116,10 @@ impl<T> GuardedJoinHandle<T> {
     pub fn abort_handle(&self) -> tokio::task::AbortHandle {
         self.0.abort_handle()
     }
+
+    pub fn guarded_abort_handle(&self) -> GuardedAbortHandle {
+        GuardedAbortHandle(self.0.abort_handle())
+    }
 }
 
 impl<T> Future for GuardedJoinHandle<T> {
@@ -128,6 +132,17 @@ impl<T> Future for GuardedJoinHandle<T> {
 impl<T> Drop for GuardedJoinHandle<T> {
     fn drop(&mut self) {
         log::trace!("Dropping GuardedJoinHandle");
+        self.0.abort();
+    }
+}
+
+
+/// A guarded AbortHandle that cancels the task on drop.
+pub struct GuardedAbortHandle(tokio::task::AbortHandle);
+
+impl Drop for GuardedAbortHandle {
+    fn drop(&mut self) {
+        log::trace!("Dropping GuardedAbortHandle");
         self.0.abort();
     }
 }

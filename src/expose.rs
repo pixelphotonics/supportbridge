@@ -66,22 +66,31 @@ where  WS: Sink<Message, Error = WsError>
     async fn handle_text_msg(&mut self, msg_text: String) -> Result<()> {
         let msg_inner = serde_json::from_str(msg_text.as_str())?;
         match msg_inner {
-            JsonMessage::Open { target_port, target_address, force } => {
-                let target_address = target_address.unwrap_or(format!("localhost"));
-
+            JsonMessage::Open { channel_id, exposed_address, force } => {
                 // Lookup in the whitelist
-                if !self.allowed_targets.iter().any(|allowed| allowed.host == target_address && allowed.port == target_port) {
+                if !self.allowed_targets.iter().any(|allowed| allowed.host == exposed_address.address && allowed.port == exposed_address.port) {
                     return Err(anyhow!("Address / port not allowed."));
                 }
 
                 // Open connection
-                let target_addr_string = format!("{}:{}", target_address, target_port);
+                let target_addr_string = format!("{}:{}", exposed_address.address, exposed_address.port);
                 let new_socket = TcpStream::connect(&target_addr_string).await?;
                 info!("Open socket to target: {}", target_addr_string);
                 let (target_read, target_write_half) = new_socket.into_split();
 
+                if self.channels.contains_key(&channel_id) {
+                    if force.unwrap_or(false) {
+                        // Close old channel
+                        let old_channel = self.channels.remove(&channel_id).unwrap();
+                        old_channel.tcp_sender.0.lock().await.take();
+                        old_channel.send_task.await?;
+                    } else {
+                        return Err(anyhow!("Channel id already in use."));
+                    }
+                }
+
                 // Acquire new id
-                let channel_id = (0..ChannelId::MAX).find(|id| self.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
+                //let channel_id = (0..ChannelId::MAX).find(|id| self.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
 
                 // Start sending task
                 let send_task = crate::tcp_to_ws_encoded(channel_id, target_read, self.out_sender.clone());
@@ -93,7 +102,15 @@ where  WS: Sink<Message, Error = WsError>
                 });
 
                 Ok(())
-            }
+            },
+            JsonMessage::CloseChannel { channel_id } => {
+                if let Some(_channel) = self.channels.remove(&channel_id) {
+                    // Dropping the channel will close the socket and abort the running task, if needed
+                    log::error!("Closing channel {}", channel_id);
+                }
+
+                Ok(())
+            },
             _ => Err(anyhow!("Invalid message: '{}'", msg_text)),
         }
     }

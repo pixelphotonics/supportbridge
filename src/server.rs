@@ -1,22 +1,27 @@
 use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
 use log::info;
+use tokio::io::AsyncWriteExt;
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
+use tokio::sync::{Mutex, Notify};
 use tungstenite::http::Uri;
 
-use crate::protocol::{ClientInfo, ExposerInfo, ServerPath};
-use crate::util::{spawn_guarded, GuardedJoinHandle};
+use crate::protocol::{ChannelId, ExposedAddress, ExposerInfo, JsonMessage, ServerPath};
+use crate::util::{spawn_guarded, GuardedAbortHandle, GuardedJoinHandle};
+
+type WsSender = futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tungstenite::Message>;
+type WsReceiver = futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>;
 
 pub struct TunnelServer {
-    pub channels: HashMap<String, Channel>,
+    pub tunnels: HashMap<String, Tunnel>,
     options: ServerOptions,
+    id_counter: usize,
 }
 
+#[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub listen_addr: core::net::SocketAddr,
     pub open_port: bool,
@@ -25,93 +30,33 @@ pub struct ServerOptions {
     pub overwrite_existing_exposer: bool,
 }
 
-pub struct Channel {
-    overwrite_existing_connection: bool,
+pub struct Tunnel {
+    uid: usize,
+    task: GuardedAbortHandle,
+    state: Arc<Mutex<TunnelState>>,
+}
+
+/// Each Tunnel represents a connection to an exposer.
+/// Multiple channels can be created on a single tunnel, e.g.
+/// for multiple clients to connect or for multiple ports to be exposed.
+pub struct TunnelState {
     info: ExposerInfo,
-    server_write: Arc<
-        Mutex<
-            futures::stream::SplitSink<
-                tokio_tungstenite::WebSocketStream<TcpStream>,
-                tungstenite::Message,
-            >,
-        >,
-    >,
-    server_read:
-        Arc<Mutex<futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>>>,
-    open_port_task: Option<JoinHandle<Result<()>>>,
-
-    current_task: Option<GuardedJoinHandle<Result<()>>>,
+    server_write: Arc<Mutex<WsSender>>,    
+    ports: Vec<ExposedPort>,
+    channels: HashMap<u8, Channel>,
 }
 
-impl Drop for Channel {
-    fn drop(&mut self) {
-        if let Some(open_port_task) = self.open_port_task.take() {
-            open_port_task.abort();
-        }
-    }
+struct ExposedPort {
+    exposed_addr: ExposedAddress,
+    listen_task: GuardedJoinHandle<Result<()>>,
 }
 
-impl Channel {
-    fn spawn_idle_task(&mut self, server_ptr: Arc<Mutex<TunnelServer>>) {
-        self.info.connected_client = None;
-        let channel_name = self.info.name.clone();
-        let ws_read = self.server_read.clone();
-        let task = spawn_guarded(async move {
-            // Idle state: listen to the unused websocket connection to see if it closes
-            let mut ws_read = ws_read.lock().await;
-            while let Some(_) = ws_read.next().await {
-                // nothing to do, just wait for the connection to close
-            }
-
-            log::info!("Channel closed: {}", channel_name);
-            server_ptr.lock().await.channels.remove(&channel_name);
-            Ok(())
-        });
-
-        //self.abort_handles.push(join_handle.abort_handle());
-        self.current_task = Some(task);
-    }
-
-    fn set_channel_user(
-        &mut self,
-        task: GuardedJoinHandle<Result<()>>,
-        peer_addr: String,
-        is_via_port: bool,
-        server_ptr: Arc<Mutex<TunnelServer>>,
-    ) {
-        if self.info.connected_client.is_some() {
-            if self.overwrite_existing_connection {
-                log::info!("Overwriting existing connection");
-            } else {
-                log::warn!("Client connection already active, ignoring connection attempt");
-                // dropping the passed task
-                return;
-            }
-        }
-
-        let channel_name = self.info.name.clone();
-
-        // This task does not need to be aborted. If all tasks finish and this spawns the idle task,
-        // this is fine, as the abort_handle of the idle task is added to the abort handle list within spawn_idle_task()
-        let task = spawn_guarded(async move {
-            log::debug!("set_channel_user1");
-            task.await??;
-            log::debug!("set_channel_user2");
-
-            let mut server_state = server_ptr.lock().await;
-            if let Some(channel) = server_state.channels.get_mut(&channel_name) {
-                channel.spawn_idle_task(server_ptr.clone());
-            }
-
-            Ok(())
-        });
-
-        self.current_task = Some(task);
-        self.info.connected_client = Some(ClientInfo {
-            peer_addr,
-            uses_port: is_via_port,
-        });
-    }
+struct Channel {
+    id: u8,
+    tcp_sender: tokio::net::tcp::OwnedWriteHalf,
+    send_task: GuardedAbortHandle,
+    open_success: Arc<Notify>,
+    exposed_addr: ExposedAddress,
 }
 
 struct CallbackHandler {
@@ -157,56 +102,222 @@ async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListene
     ));
 }
 
-async fn open_connection_port(
-    id: String,
-    server: Arc<Mutex<TunnelServer>>,
-    port_range: RangeInclusive<u16>,
-) -> Result<()> {
-    let tcp_listener = open_tcp_listener(port_range).await?;
+
+async fn serve_channel(tcp_read: tokio::net::tcp::OwnedReadHalf, channel_id: ChannelId, exposed_address: ExposedAddress, ws_out: Arc<Mutex<WsSender>>, open_notify: Arc<Notify>) -> Result<()> {
+    ws_out
+        .clone()
+        .lock_owned()
+        .await
+        .send(JsonMessage::Open { channel_id, exposed_address, force: None }.encode_ws())
+        .await?;
+
+    open_notify.notified().await;
+
+    // Forward all traffic from the TCP port to the websocket
+    crate::tcp_to_ws_encoded(channel_id, tcp_read, ws_out).await??;
+
+    Ok(())
+}
+
+async fn get_tunnel_lock(tunnel: &Weak<Mutex<TunnelState>>) -> Result<tokio::sync::OwnedMutexGuard<TunnelState>> {
+    Ok(tunnel
+        .upgrade()
+        .ok_or(anyhow::anyhow!("Tunnel closed"))?
+        .lock_owned()
+        .await)
+}
+
+async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exposed_address: ExposedAddress) -> Result<()> {
+    let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
+
+    let ws_out = tunnel_lock.server_write.clone();
+    let (tcp_read, tcp_write) = stream.into_split();
+    let open_success = Arc::new(Notify::new());
+
+    // Find free channel id
+    let channel_id = (0..ChannelId::MAX).find(|id| tunnel_lock.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
+
+    let channel_task = spawn_guarded(serve_channel(tcp_read, channel_id, exposed_address.clone(), ws_out, open_success.clone()));
+
+    let channel = Channel {
+        id: channel_id,
+        tcp_sender: tcp_write,
+        send_task: channel_task.guarded_abort_handle(),
+        open_success,
+        exposed_addr: exposed_address,
+    };
+    
+    tunnel_lock
+        .channels
+        .insert(channel_id, channel);
+
+    // clean up once the task is done
+    tokio::spawn(async move {
+        let _result = channel_task.await;
+        log::info!("Channel task finished");
+        if let Ok(mut tunnel) = get_tunnel_lock(&tunnel).await {
+            // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
+            let _ = tunnel.server_write.lock().await.send(JsonMessage::CloseChannel { channel_id }.encode_ws()).await;
+            tunnel.channels.remove(&channel_id);
+        }
+    });
+
+    Ok(())
+}
+
+
+async fn listen_tcp_port(port_range: RangeInclusive<u16>, tunnel: Weak<Mutex<TunnelState>>, exposed_address: ExposedAddress) -> Result<()> {
+    let listener = open_tcp_listener(port_range).await?;
+    while let Ok((stream, _)) = listener.accept().await {
+        let peer = stream.peer_addr()?;
+        info!("Peer address: {}", peer);
+
+        match create_channel(stream, tunnel.clone(), exposed_address.clone()).await {
+            Ok(_) => {}
+            Err(e) => {
+                log::error!("Error handling connection: {:?}", e);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+
+async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, options: ServerOptions) -> Result<()> {
+    // Register and wait for "ok" from exposer
     {
-        // store information about the open port
-        let mut server_state = server.lock().await;
-        let channel = server_state
-            .channels
-            .get_mut(&id)
-            .ok_or(anyhow!("Unknown channel id: {}", id))?;
-        channel.info.open_port = Some(tcp_listener.local_addr()?.port());
+        let tunnel_lock = get_tunnel_lock(&tunnel).await?;
+        tunnel_lock.server_write.lock().await.send(JsonMessage::OpenTunnel {  }.encode_ws()).await?;
     }
 
-    loop {
-        let (stream, addr) = tcp_listener.accept().await?;
+    // Process incoming messages
+    while let Some(msg) = ws_in.next().await {
+        match msg {
+            Ok(tungstenite::Message::Text(msg_text)) => {
+                let msg_inner = serde_json::from_str(msg_text.as_str())?;
+                match msg_inner {
+                    JsonMessage::OpenTunnelSuccess { exposed } => {
+                        log::info!("Exposer opened tunnel for ports: {:?}", exposed);
+                        let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
 
-        log::debug!("Connection on open port: {}", addr);
+                        for exposed_addr in exposed {
+                            let listen_task = spawn_guarded(listen_tcp_port(
+                                options.port_range.clone(),
+                                tunnel.clone(),
+                                exposed_addr.clone(),
+                            ));
 
-        // get server streams
-        let mut server_state = server.lock().await;
-        let channel = server_state
-            .channels
-            .get_mut(&id)
-            .ok_or(anyhow!("Unknown channel id: {}", id))?;
-
-        let ws_out = channel.server_write.clone();
-        let ws_in = channel.server_read.clone();
-
-        let task = spawn_guarded(async move {
-            let mut ws_out = ws_out.lock_owned().await;
-            ws_out
-                .send(tungstenite::Message::Text("init".into()))
-                .await?;
-
-
-            let (tcp_read, tcp_write) = stream.into_split();
-            
-            let task_tcp_to_ws = crate::tcp_to_ws(tcp_read, ws_out);
-            let task_ws_to_tcp = crate::ws_to_tcp(ws_in.lock_owned().await, tcp_write, None::<Vec<String>>);
-
-            task_tcp_to_ws.await??;
-            task_ws_to_tcp.await??;
-            Ok(())
-        });
-
-        channel.set_channel_user(task, format!("{}", addr), true, server.clone());
+                            tunnel_lock.ports.push(ExposedPort {
+                                exposed_addr,
+                                listen_task,
+                            });
+                        }
+                    },
+                    JsonMessage::OpenSuccessful { channel_id } => {
+                        log::info!("Channel opened: {}", channel_id);
+                        let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
+                        if let Some(channel) = tunnel_lock.channels.get_mut(&channel_id) {
+                            channel.open_success.notify_waiters();
+                        } else {
+                            log::error!("Channel not found: {}", channel_id);
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            Ok(tungstenite::Message::Binary(encoded_msg)) => {
+                if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&encoded_msg[..]) {
+                    let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
+                    if let Some(channel) = tunnel_lock.channels.get_mut(&msg.channel_id) {
+                        if let Err(_) = channel.tcp_sender.write_all(msg.data).await {
+                            log::error!("Error writing to TCP stream, dropping channel.");
+                            tunnel_lock.channels.remove(&msg.channel_id);
+                        }
+                    } else {
+                        return Err(anyhow!("Unknown channel id: {}", msg.channel_id));
+                    }
+                } else {
+                    log::warn!("Invalid binary message");
+                }
+            }
+            Err(e) => {
+                log::error!("Error reading message: {}", e);
+            },
+            _ => {
+                log::trace!("Unhandled websocket frame");
+            }
+        }
     }
+
+    Ok(())
+
+}
+
+
+async fn open_tunnel(
+    server: Arc<Mutex<TunnelServer>>,
+    ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
+    peer_addr: String,
+    name: String,
+) -> Result<()>
+{
+    log::debug!("Register server: '{}'", &name);
+    let mut server_state = server.clone().lock_owned().await;
+
+    server_state.id_counter += 1;
+    let new_tunnel_id = server_state.id_counter;
+
+    if let Some(tunnel) = server_state.tunnels.remove(&name) {
+        let tunnel_state = tunnel.state.lock().await;
+        println!(
+            "Dropping existing tunnel: {}, {}",
+            tunnel_state.info.name, tunnel_state.info.peer_addr
+        );
+        // Dropping `tunnel` will close the connection, as the guarded abort handle is dropped
+    }
+
+    // Create new channel
+    let (ws_out, ws_in) = ws_stream.split();
+    let tunnel_state = Arc::new(Mutex::new(TunnelState {
+        info: ExposerInfo {
+            name: name.clone(),
+            open_time: chrono::Utc::now()
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            connected_client: None,
+            peer_addr,
+            open_port: None,
+        },
+        server_write: Arc::new(Mutex::new(ws_out)),
+        channels: HashMap::new(),
+        ports: Vec::new(),
+    }));
+
+    let task = spawn_guarded(serve_tunnel(
+        ws_in,
+        Arc::downgrade(&tunnel_state),
+        server_state.options.clone(),
+    ));
+    
+    server_state.tunnels.insert(name.clone(), Tunnel {
+        uid: new_tunnel_id,
+        task: task.guarded_abort_handle(),
+        state: tunnel_state.clone(),
+    });
+
+    // clean up once the task is done
+    tokio::spawn(async move {
+        let _result = task.await;
+        log::info!("Tunnel task finished");
+        let mut server_state = server.clone().lock_owned().await;
+        if let Some(tunnel) = server_state.tunnels.get(&name) {
+            if tunnel.uid == new_tunnel_id {
+                server_state.tunnels.remove(&name);
+            }
+        }
+    });
+
+    Ok(())
 }
 
 async fn handle_connection(
@@ -231,54 +342,11 @@ async fn handle_connection(
     match server_cmd {
         ServerPath::Register { name } => {
             log::debug!("Register server: '{}'", &name);
-            let mut server_state = server.lock().await;
-
-            if let Some(channel) = server_state.channels.remove(&name) {
-                println!(
-                    "Dropping existing channel: {}, {}",
-                    channel.info.name, channel.info.peer_addr
-                );
-                // Dropping the channel will close the connection
-            }
-
-            // Open a port for this channel
-            let open_port_task = if server_state.options.open_port {
-                // The server is still locked when this is spawened, so the open port task will only start once the server is unlocked at the end of the parent scope
-                Some(tokio::spawn(open_connection_port(
-                    name.clone(),
-                    server.clone(),
-                    server_state.options.port_range.clone(),
-                )))
-            } else {
-                None
-            };
-
-            // Create new channel
-            let (ws_out, ws_in) = ws_stream.split();
-
-            let mut new_channel = Channel {
-                server_write: Arc::new(Mutex::new(ws_out)),
-                server_read: Arc::new(Mutex::new(ws_in)),
-                info: ExposerInfo {
-                    name: name.clone(),
-                    open_time: chrono::Utc::now()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    connected_client: None,
-                    peer_addr: peer_addr,
-                    open_port: None,
-                },
-                overwrite_existing_connection: server_state.options.overwrite_existing_connection,
-                open_port_task,
-
-                current_task: None,
-            };
-
-            new_channel.spawn_idle_task(server.clone());
-            server_state.channels.insert(name.clone(), new_channel);
+            open_tunnel(server, ws_stream, peer_addr, name).await?;
         }
-        ServerPath::Connect { name } => {
+        /*ServerPath::Connect { name } => {
             let mut server_state = server.lock().await;
-            if let Some(channel) = server_state.channels.get_mut(&name) {
+            if let Some(channel) = server_state.tunnels.get_mut(&name) {
                 log::info!("Connect to channel: {}", name);
 
                 let ws_out = channel.server_write.clone();
@@ -306,16 +374,23 @@ async fn handle_connection(
                 log::error!("Channel not found: {}", name);
                 ws_stream.close(None).await?;
             }
-        }
+        }*/
         ServerPath::List => {
             let server_state = server.lock().await;
-            let infos: Vec<_> = server_state
-                .channels
-                .iter()
-                .map(|c| c.1.info.clone())
-                .collect();
+            let infos = futures::stream::iter(&server_state.tunnels)
+                .then(|(_, tunnel)| async {
+                    let tunnel_state = tunnel.state.lock().await;
+                    tunnel_state.info.clone()
+                })
+                .collect::<Vec<_>>()
+                .await;
+
             let data = serde_json::to_string(&infos)?;
             ws_stream.send(tungstenite::Message::Text(data)).await?;
+            ws_stream.close(None).await?;
+        }
+        _ => {
+            log::error!("Invalid command: {:?}", server_cmd);
             ws_stream.close(None).await?;
         }
     }
@@ -328,8 +403,9 @@ pub async fn serve(options: ServerOptions) -> Result<()> {
     info!("Listening on {}", options.listen_addr);
 
     let server = Arc::new(Mutex::new(TunnelServer {
-        channels: HashMap::new(),
+        tunnels: HashMap::new(),
         options,
+        id_counter: 0,
     }));
 
     while let Ok((stream, _)) = listener.accept().await {
