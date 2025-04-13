@@ -1,5 +1,6 @@
+use anyhow::anyhow;
 use clap::{Parser, Subcommand};
-use supportbridge::util::{self, parse_bind_address};
+use supportbridge::{protocol::ExposedAddress, util::{self, parse_bind_address}};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -49,7 +50,7 @@ enum Command {
         bind: String,
 
         /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
-        target: String,
+        target: Vec<String>,
 
         /// Optionally, the address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
         /// If this is passed, the exposer will register itself with the server instead of listening for websocket connections.
@@ -59,24 +60,6 @@ enum Command {
         /// Name of the exposed machine to register on the server. If not given, the system hostname will be used.
         #[arg(short = 'n', long)]
         name: Option<String>,
-    },
-
-    /// Open a local TCP port which maps to an exposer <name> via the supportbridge <server>.
-    Open {
-        /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
-        #[clap(long, default_value = "[::]:8083")]
-        bind: String,
-
-        /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
-        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
-        /// If no URL schema is included, ws:// is assumed.
-        ///
-        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
-        /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
-        server: String,
-
-        /// Name of the exposed machine
-        name: String,
     },
 
     /// Connect an exposed websocket-to-TCP bridge with a server
@@ -142,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Expose { bind, target, server, name } => {
             use supportbridge::expose;
 
-            let target_addr = util::parse_address(&target).await?;
+            let target_addr = target.into_iter().map(|t| ExposedAddress::try_from(t).map_err(|e| anyhow!(e))).collect::<Result<_, _>>()?;
 
             if let Some(server) = server {
                 let name = match name {
@@ -155,14 +138,6 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 expose::listen_to_ws(parse_bind_address(&bind)?, target_addr).await?;
             }            
-        }
-        Command::Open {
-            bind,
-            server,
-            name,
-        } => {
-            use supportbridge::client;
-            client::serve(parse_bind_address(&bind)?, server, name).await?;
         }
         Command::Relay {
             exposed_addr,

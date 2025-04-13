@@ -71,10 +71,41 @@ impl<'a> BinaryMessage<'a> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExposedAddress {
     pub address: String,
     pub port: u16,
+}
+
+impl TryFrom<String> for ExposedAddress {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // Special case: if it's an IPv6 address like "[::1]:80"
+        let (host, port_str) = if value.starts_with('[') {
+            // IPv6 should be in form "[addr]:port"
+            let closing = value.find(']').ok_or("Invalid IPv6 format, missing ']'")?;
+            let host = &value[1..closing];
+            let rest = &value[(closing + 1)..];
+            if !rest.starts_with(':') {
+                return Err("Invalid IPv6 format, missing ':' after ']'");
+            }
+            (host, &rest[1..])
+        } else {
+            // Normal hostname or IPv4, split on the last colon
+            match value.rsplit_once(':') {
+                Some((host, port)) => (host, port),
+                None => return Err("Missing port separator ':'"),
+            }
+        };
+    
+        let port: u16 = port_str.parse().map_err(|_| "Invalid port number")?;
+    
+        Ok(Self {
+            address: host.to_string(),
+            port,
+        })
+    }
 }
 
 
@@ -100,10 +131,6 @@ pub enum JsonMessage {
 
         /// The port on the exposer to connect to.
         exposed_address: ExposedAddress,
-
-        /// If the exposer runs out of channel ids, if this option is passed, the exposer will try to free
-        /// old connections.
-        force: Option<bool>,
     },
 
     /// This message is sent when a channel is closed. This can be sent by the exposer or the server.
@@ -222,5 +249,59 @@ impl std::fmt::Display for ServerPath {
                 write!(f, "list")
             },
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exposed_address_try_from_valid_ipv4() {
+        let input = "127.0.0.1:8080".to_string();
+        let result = ExposedAddress::try_from(input).unwrap();
+        assert_eq!(result.address, "127.0.0.1");
+        assert_eq!(result.port, 8080);
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_valid_ipv6() {
+        let input = "[::1]:8080".to_string();
+        let result = ExposedAddress::try_from(input).unwrap();
+        assert_eq!(result.address, "::1");
+        assert_eq!(result.port, 8080);
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_missing_port() {
+        let input = "127.0.0.1".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Missing port separator ':'");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_invalid_port() {
+        let input = "127.0.0.1:abc".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid port number");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_invalid_ipv6_format() {
+        let input = "[::1".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid IPv6 format, missing ']'");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_ipv6_missing_colon() {
+        let input = "[::1]8080".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid IPv6 format, missing ':' after ']'");
     }
 }

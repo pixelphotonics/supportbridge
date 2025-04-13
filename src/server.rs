@@ -108,7 +108,7 @@ async fn serve_channel(tcp_read: tokio::net::tcp::OwnedReadHalf, channel_id: Cha
         .clone()
         .lock_owned()
         .await
-        .send(JsonMessage::Open { channel_id, exposed_address, force: None }.encode_ws())
+        .send(JsonMessage::Open { channel_id, exposed_address }.encode_ws())
         .await?;
 
     open_notify.notified().await;

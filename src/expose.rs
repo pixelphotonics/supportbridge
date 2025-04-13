@@ -14,8 +14,8 @@ type WsError = tungstenite::error::Error;
 type WsResult = std::result::Result<Message, WsError>;
 
 use crate::client::connect_to_server;
-use crate::protocol::{ChannelId, JsonMessage, ServerPath};
-use crate::util::{spawn_guarded, GuardedJoinHandle};
+use crate::protocol::{ChannelId, ExposedAddress, JsonMessage, ServerPath};
+use crate::util::{spawn_guarded, GuardedAbortHandle};
 use crate::WriteBinary;
 
 struct MutexTcpSender(Arc<Mutex<Option<tokio::net::tcp::OwnedWriteHalf>>>);
@@ -33,16 +33,10 @@ impl WriteBinary for MutexTcpSender {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct AllowedTarget {
-    pub host: String,
-    pub port: u16,
-}
-
 struct ExposerChannel {
     channel: ChannelId,
     tcp_sender: MutexTcpSender,
-    send_task: GuardedJoinHandle<Result<()>>,
+    send_task: GuardedAbortHandle,
 }
 
 struct Exposer<WS> 
@@ -52,8 +46,8 @@ where
         + std::marker::Send
         + 'static
 {
-    channels: HashMap<ChannelId, ExposerChannel>,
-    allowed_targets: Vec<AllowedTarget>,
+    channels: Arc<Mutex<HashMap<ChannelId, ExposerChannel>>>,
+    allowed_targets: Vec<ExposedAddress>,
     out_sender: Arc<Mutex<SplitSink<WS, Message>>>,
 }
 
@@ -63,13 +57,27 @@ where  WS: Sink<Message, Error = WsError>
     + std::marker::Send
     + 'static 
 {
-    async fn handle_text_msg(&mut self, msg_text: String) -> Result<()> {
+    async fn handle_text_msg(&mut self, msg_text: String) -> Result<Option<JsonMessage>> {
         let msg_inner = serde_json::from_str(msg_text.as_str())?;
         match msg_inner {
-            JsonMessage::Open { channel_id, exposed_address, force } => {
+            JsonMessage::OpenTunnel {  } => {
+                // Send the list of allowed targets to the server
+                let json_msg = JsonMessage::OpenTunnelSuccess {
+                    exposed: self.allowed_targets.clone(),
+                };
+                self.out_sender.lock().await.send(json_msg.encode_ws()).await?;
+                Ok(Some(json_msg))
+            },
+            JsonMessage::Open { channel_id, exposed_address } => {
                 // Lookup in the whitelist
-                if !self.allowed_targets.iter().any(|allowed| allowed.host == exposed_address.address && allowed.port == exposed_address.port) {
+                if !self.allowed_targets.iter().any(|allowed| *allowed == exposed_address) {
                     return Err(anyhow!("Address / port not allowed."));
+                }
+
+                let mut channels = self.channels.clone().lock_owned().await;
+
+                if channels.contains_key(&channel_id) {
+                    return Err(anyhow!("Channel id already in use. Close the old channel first."));
                 }
 
                 // Open connection
@@ -78,46 +86,45 @@ where  WS: Sink<Message, Error = WsError>
                 info!("Open socket to target: {}", target_addr_string);
                 let (target_read, target_write_half) = new_socket.into_split();
 
-                if self.channels.contains_key(&channel_id) {
-                    if force.unwrap_or(false) {
-                        // Close old channel
-                        let old_channel = self.channels.remove(&channel_id).unwrap();
-                        old_channel.tcp_sender.0.lock().await.take();
-                        old_channel.send_task.await?;
-                    } else {
-                        return Err(anyhow!("Channel id already in use."));
-                    }
-                }
-
-                // Acquire new id
-                //let channel_id = (0..ChannelId::MAX).find(|id| self.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
-
                 // Start sending task
                 let send_task = crate::tcp_to_ws_encoded(channel_id, target_read, self.out_sender.clone());
 
-                self.channels.insert(channel_id, ExposerChannel {
+                channels.insert(channel_id, ExposerChannel {
                     channel: channel_id,
                     tcp_sender: MutexTcpSender(Arc::new(Mutex::new(Some(target_write_half)))),
-                    send_task,
+                    send_task: send_task.guarded_abort_handle(),
                 });
 
-                Ok(())
+                // When the channel is closed, e.g. when the target closes the connection, we need to remove it from the list
+                // clean up once the task is done
+                let channels = self.channels.clone();
+                let out_sender = self.out_sender.clone();
+                tokio::spawn(async move {
+                    let _result = send_task.await;
+                    log::info!("Channel task finished");
+                    // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
+                    let _ = out_sender.lock().await.send(JsonMessage::CloseChannel { channel_id }.encode_ws()).await;
+                    channels.lock().await.remove(&channel_id);
+                });
+
+                Ok(Some(JsonMessage::OpenSuccessful { channel_id }))
             },
             JsonMessage::CloseChannel { channel_id } => {
-                if let Some(_channel) = self.channels.remove(&channel_id) {
-                    // Dropping the channel will close the socket and abort the running task, if needed
+                if let Some(channel) = self.channels.lock().await.get_mut(&channel_id) {
+                    // Aborting the task will lead to the clean-up task to run, which removes the channel from the list
                     log::error!("Closing channel {}", channel_id);
+                    channel.send_task.abort();
                 }
 
-                Ok(())
+                Ok(None)
             },
             _ => Err(anyhow!("Invalid message: '{}'", msg_text)),
         }
     }
 
-    async fn handle_binary_msg(&mut self, data: Vec<u8>) -> Result<()> {
+    async fn handle_binary_msg(&mut self, data: Vec<u8>) -> Result<Option<JsonMessage>> {
         if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&data[..]) {
-            if let Some(channel) = self.channels.get_mut(&msg.channel_id) {
+            if let Some(channel) = self.channels.lock().await.get_mut(&msg.channel_id) {
                 channel.tcp_sender.write_binary(msg.data).await?;
             } else {
                 return Err(anyhow!("Unknown channel id: {}", msg.channel_id));
@@ -126,14 +133,14 @@ where  WS: Sink<Message, Error = WsError>
             log::warn!("Invalid binary message");
         }
 
-        Ok(())
+        Ok(None)
     }
 }
 
 
 
 
-async fn handle_connection<WS>(ws_stream: WS, allowed_targets: Vec<AllowedTarget>) -> Result<()>
+async fn handle_connection<WS>(ws_stream: WS, allowed_targets: Vec<ExposedAddress>) -> Result<()>
 where 
     WS: Sink<Message, Error = WsError>
         + Stream<Item = WsResult>
@@ -143,7 +150,7 @@ where
     let (ws_out, mut ws_in) = ws_stream.split();
 
     let mut exposer = Exposer {
-        channels: HashMap::new(),
+        channels: Arc::new(Mutex::new(HashMap::new())),
         allowed_targets,
         out_sender: Arc::new(Mutex::new(ws_out)),
     };
@@ -152,7 +159,7 @@ where
         let response = match msg {
             Err(e) => {
                 log::error!("Websocket error: {}", e);
-                Ok(())
+                Ok(None)
             },
             Ok(tungstenite::Message::Text(msg_text)) => {
                 exposer.handle_text_msg(msg_text).await
@@ -163,15 +170,23 @@ where
             },
             _ => {
                 log::trace!("Unhandled websocket frame");
-                Ok(())
+                Ok(None)
             }
         };
 
-        // Handle errors by sending an error message
-        if let Err(e) = response {
-            log::error!("Error handling message: {}", e);
-            let json_err = JsonMessage::Error { message: e.to_string() };
-            exposer.out_sender.lock().await.send(json_err.encode_ws()).await?;
+        // If applicable, send the response back to the server
+        match response {
+            Ok(Some(msg)) => {
+                exposer.out_sender.lock().await.send(msg.encode_ws()).await?;
+            },
+            Ok(None) => {
+                // No action needed
+            },
+            Err(e) => {
+                log::error!("Error handling message: {}", e);
+                let json_err = JsonMessage::Error { message: e.to_string() };
+                exposer.out_sender.lock().await.send(json_err.encode_ws()).await?;
+            }
         }
     }
 
@@ -180,7 +195,7 @@ where
 
 /// Listen on the given bind address and expose the target_addr via a websocket connection.
 /// In order to connect the exposer with the server, a third-party relay needs to be used.
-pub async fn listen_to_ws(bind: SocketAddr, allowed_targets: Vec<AllowedTarget>) -> Result<()> {
+pub async fn listen_to_ws(bind: SocketAddr, allowed_targets: Vec<ExposedAddress>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
     info!("Exposing to {}", bind);
 
@@ -197,7 +212,7 @@ pub async fn listen_to_ws(bind: SocketAddr, allowed_targets: Vec<AllowedTarget>)
 
 /// Expose the target_addr and directly connect to the server and register this exposer under the given name.
 /// This can be used as long as the exposer can directly connect to the server and is not within a protected network.
-pub async fn expose_and_register(ws_server: String, allowed_targets: Vec<AllowedTarget>, name: String) -> Result<()> {
+pub async fn expose_and_register(ws_server: String, allowed_targets: Vec<ExposedAddress>, name: String) -> Result<()> {
     let ws_stream = connect_to_server(ws_server, ServerPath::Register { name }).await?;
     handle_connection(ws_stream, allowed_targets).await?;
 
