@@ -13,10 +13,9 @@ use tokio::sync::Mutex;
 type WsError = tungstenite::error::Error;
 type WsResult = std::result::Result<Message, WsError>;
 
-use crate::client::connect_to_server;
 use crate::protocol::{ChannelId, ExposedAddress, JsonMessage, ServerPath};
 use crate::util::{spawn_guarded, GuardedAbortHandle};
-use crate::WriteBinary;
+use crate::{connect_to_server, WriteBinary};
 
 struct MutexTcpSender(Arc<Mutex<Option<tokio::net::tcp::OwnedWriteHalf>>>);
 

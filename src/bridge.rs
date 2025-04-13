@@ -1,7 +1,7 @@
 use anyhow::Result;
 use futures::StreamExt;
 
-use crate::{client::connect_to_server, protocol::ServerPath};
+use crate::{connect_to_server, protocol::ServerPath};
 
 pub async fn bridge(server_addr: String, peer_name: String, exposed: String) -> Result<()> {
     let ws_server_stream = connect_to_server(server_addr.clone(), ServerPath::Register { name: peer_name }).await?;

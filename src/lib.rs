@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::{stream::Stream, Sink, SinkExt, StreamExt};
-use protocol::{BinaryMessage, ChannelId};
+use protocol::{BinaryMessage, ChannelId, ServerPath};
 use std::{error::Error, sync::Arc};
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::{marker::{Send, Unpin}, ops::DerefMut};
@@ -8,7 +8,6 @@ use tungstenite::Message;
 use util::{spawn_guarded, GuardedJoinHandle};
 
 pub mod bridge;
-pub mod client;
 pub mod expose;
 pub mod protocol;
 pub mod server;
@@ -177,4 +176,15 @@ where
     up_to_down.await??;
 
     Ok(())
+}
+
+
+
+pub async fn connect_to_server(
+    ws_server: String,
+    cmd: ServerPath,
+) -> Result<tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>> {
+    let request = crate::util::build_request(&ws_server, cmd)?;
+    let (ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
+    Ok(ws_server_stream)
 }
