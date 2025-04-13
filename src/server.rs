@@ -96,10 +96,11 @@ async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListene
         }
     }
 
-    return Err(anyhow::anyhow!(
+    // If we reach here, no port was available
+    Err(anyhow::anyhow!(
         "No available ports in range: {:?}",
         port_range
-    ));
+    ))
 }
 
 
@@ -223,6 +224,16 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                             log::error!("Channel not found: {}", channel_id);
                         }
                     },
+                    JsonMessage::CloseChannel { channel_id } => {
+                        log::info!("Channel closed: {}", channel_id);
+                        let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
+                        if let Some(channel) = tunnel_lock.channels.get_mut(&channel_id) {
+                            channel.send_task.abort();
+                        }
+                        else {
+                            // If the channel is not in the list, we don't consider this an error.
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -232,7 +243,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                     if let Some(channel) = tunnel_lock.channels.get_mut(&msg.channel_id) {
                         if let Err(_) = channel.tcp_sender.write_all(msg.data).await {
                             log::error!("Error writing to TCP stream, dropping channel.");
-                            tunnel_lock.channels.remove(&msg.channel_id);
+                            channel.send_task.abort();
                         }
                     } else {
                         return Err(anyhow!("Unknown channel id: {}", msg.channel_id));
