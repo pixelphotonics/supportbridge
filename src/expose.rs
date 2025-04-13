@@ -68,7 +68,7 @@ where  WS: Sink<Message, Error = WsError>
                 self.out_sender.lock().await.send(json_msg.encode_ws()).await?;
                 Ok(Some(json_msg))
             },
-            JsonMessage::Open { channel_id, exposed_address } => {
+            JsonMessage::OpenChannel { channel_id, exposed_address } => {
                 // Lookup in the whitelist
                 if !self.allowed_targets.iter().any(|allowed| *allowed == exposed_address) {
                     return Err(anyhow!("Address / port not allowed."));
@@ -107,7 +107,7 @@ where  WS: Sink<Message, Error = WsError>
                     channels.lock().await.remove(&channel_id);
                 });
 
-                Ok(Some(JsonMessage::OpenSuccessful { channel_id }))
+                Ok(Some(JsonMessage::OpenChannelSuccessful { channel_id }))
             },
             JsonMessage::CloseChannel { channel_id } => {
                 if let Some(channel) = self.channels.lock().await.get_mut(&channel_id) {

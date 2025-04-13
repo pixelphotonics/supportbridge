@@ -125,7 +125,7 @@ pub enum JsonMessage {
     },
 
     /// Open a new channel. Sent from server to exposer.
-    Open {
+    OpenChannel {
         /// The channel id as assigned by the server.
         channel_id: ChannelId,
 
@@ -140,7 +140,7 @@ pub enum JsonMessage {
     },
 
     /// A new channel was initialized and the given id was assigned.
-    OpenSuccessful {
+    OpenChannelSuccessful {
         channel_id: ChannelId,
     },
 
