@@ -397,7 +397,7 @@ async fn handle_connection(
                 .await;
 
             let data = serde_json::to_string(&infos)?;
-            ws_stream.send(tungstenite::Message::Text(data)).await?;
+            ws_stream.send(tungstenite::Message::Text(data.into())).await?;
             ws_stream.close(None).await?;
         }
         _ => {

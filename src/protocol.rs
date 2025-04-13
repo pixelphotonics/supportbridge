@@ -56,7 +56,7 @@ impl<'a> BinaryMessage<'a> {
         let mut out_buf = Vec::with_capacity(data.len() + 1);
         out_buf.push(channel_id);
         out_buf.extend_from_slice(data);
-        tungstenite::Message::Binary(out_buf)
+        tungstenite::Message::Binary(out_buf.into())
     }
 
     pub fn from_ws(in_data: &'a [u8]) -> Option<Self> {
@@ -153,7 +153,7 @@ pub enum JsonMessage {
 impl JsonMessage {
     pub fn encode_ws(&self) -> tungstenite::Message {
         let msg = serde_json::to_string(self).unwrap();
-        tungstenite::Message::Text(msg)
+        tungstenite::Message::Text(msg.into())
     }
 }
 

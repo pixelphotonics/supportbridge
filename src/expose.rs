@@ -56,8 +56,8 @@ where  WS: Sink<Message, Error = WsError>
     + std::marker::Send
     + 'static 
 {
-    async fn handle_text_msg(&mut self, msg_text: String) -> Result<Option<JsonMessage>> {
-        let msg_inner = serde_json::from_str(msg_text.as_str())?;
+    async fn handle_text_msg(&mut self, msg_text: &str) -> Result<Option<JsonMessage>> {
+        let msg_inner = serde_json::from_str(msg_text)?;
         match msg_inner {
             JsonMessage::OpenTunnel {  } => {
                 // Send the list of allowed targets to the server
@@ -121,7 +121,7 @@ where  WS: Sink<Message, Error = WsError>
         }
     }
 
-    async fn handle_binary_msg(&mut self, data: Vec<u8>) -> Result<Option<JsonMessage>> {
+    async fn handle_binary_msg(&mut self, data: tungstenite::Bytes) -> Result<Option<JsonMessage>> {
         if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&data[..]) {
             if let Some(channel) = self.channels.lock().await.get_mut(&msg.channel_id) {
                 channel.tcp_sender.write_binary(msg.data).await?;
@@ -161,7 +161,7 @@ where
                 Ok(None)
             },
             Ok(tungstenite::Message::Text(msg_text)) => {
-                exposer.handle_text_msg(msg_text).await
+                exposer.handle_text_msg(msg_text.as_str()).await
             },
             Ok(tungstenite::Message::Binary(msg_binary)) => {
                 // forward to corresponding channel

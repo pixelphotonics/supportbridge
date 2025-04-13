@@ -31,46 +31,6 @@ where
     }
 }
 
-
-/// Take a websocket stream and relay all binary messages from the websocket
-/// to the TCP stream, while relaying all text messages to the text handler.
-pub fn ws_to_tcp<WsRx, TcpTx, TxtRx, TxtErr>(
-    mut ws_in: impl DerefMut<Target = WsRx> + Send + 'static,
-    mut tcp_out: TcpTx,
-    mut text_handler: Option<TxtRx>,
-) -> GuardedJoinHandle<Result<()>>
-where
-    WsRx: Stream<Item = WsResult> + Unpin + Send + 'static,
-    TcpTx: WriteBinary + Unpin + Send + 'static,
-    TxtRx: Sink<String, Error = TxtErr> + Unpin + Send + 'static,
-    TxtErr: Error + Send + Sync + 'static,
-{
-    spawn_guarded(async move {
-        log::debug!("Starting WS->TCP relay");
-        while let Some(msg) = ws_in.next().await {
-            match msg? {
-                tungstenite::Message::Text(textmsg) => {
-                    log::trace!("WS: Text message: {}", textmsg);
-                    if let Some(text_handler) = text_handler.as_mut() {
-                        text_handler.send(textmsg).await?;
-                    }
-                },
-                tungstenite::Message::Binary(binmsg) => {
-                    log::trace!("WS->TCP: {} bytes", binmsg.len());
-                    tcp_out.write_binary(&binmsg).await?;
-                }
-                tungstenite::Message::Close(_) => {
-                    log::debug!("WS->TCP: Close message received");
-                    break;
-                },
-                _ => { }
-            }
-        }
-
-        Ok(())
-    })
-}
-
 /// Take a TCP stream and relay all binary messages from the TCP stream
 /// to the websocket stream.
 pub fn tcp_to_ws<TRx, WTx>(
@@ -92,7 +52,7 @@ where
 
             log::debug!("TCP->WS: {} bytes", n);
             tx_ws
-                .send(tungstenite::Message::Binary(buf[..n].to_vec()))
+                .send(tungstenite::Message::Binary(tungstenite::Bytes::copy_from_slice(&buf[..n])))
                 .await?;
         }
 
