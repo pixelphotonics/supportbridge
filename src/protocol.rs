@@ -146,15 +146,15 @@ pub enum JsonMessage {
     },
 }
 
-impl Into<tungstenite::Message> for JsonMessage {
-    fn into(self) -> tungstenite::Message {
-        tungstenite::Message::Text(serde_json::to_string(&self).unwrap().into())
+impl From<JsonMessage> for tungstenite::Message {
+    fn from(message: JsonMessage) -> tungstenite::Message {
+        tungstenite::Message::Text(serde_json::to_string(&message).unwrap().into())
     }
 }
 
-impl Into<axum::extract::ws::Message> for JsonMessage {
-    fn into(self) -> axum::extract::ws::Message {
-        axum::extract::ws::Message::Text(serde_json::to_string(&self).unwrap().into())
+impl From<JsonMessage> for axum::extract::ws::Message {
+    fn from(message: JsonMessage) -> axum::extract::ws::Message {
+        axum::extract::ws::Message::Text(serde_json::to_string(&message).unwrap().into())
     }
 }
 
