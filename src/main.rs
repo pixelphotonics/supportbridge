@@ -28,12 +28,6 @@ enum Command {
         #[arg(short = 'c', long)]
         dont_overwrite_connection: bool,
 
-        /// Open a TCP port on the server to which connections can be made directly.
-        /// This allows third-party tools to connect to the exposer directly by connecting to the opened port on the server.
-        /// If this is false (the default), an additional client instance must be run to connect to the exposer via the server.
-        #[arg(short, long)]
-        open_ports: bool,
-
         /// The minimum port number to use when opening ports on the server.
         #[arg(long, default_value = "11000")]
         min_port: u16,
@@ -107,7 +101,6 @@ async fn main() -> anyhow::Result<()> {
             bind,
             dont_overwrite_exposer,
             dont_overwrite_connection,
-            open_ports,
             min_port,
             max_port,
         } => {
@@ -115,7 +108,6 @@ async fn main() -> anyhow::Result<()> {
 
             let server_options = server::ServerOptions {
                 listen_addr: parse_bind_address(&bind)?,
-                open_port: open_ports,
                 port_range: min_port..=max_port,
                 overwrite_existing_connection: !dont_overwrite_connection,
                 overwrite_existing_exposer: !dont_overwrite_exposer,

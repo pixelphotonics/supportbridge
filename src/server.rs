@@ -25,7 +25,6 @@ pub struct TunnelServer {
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
     pub listen_addr: core::net::SocketAddr,
-    pub open_port: bool,
     pub port_range: RangeInclusive<u16>,
     pub overwrite_existing_connection: bool,
     pub overwrite_existing_exposer: bool,
