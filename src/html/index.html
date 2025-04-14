@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supportbridge - Info</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f4f4f4;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+
+        .peeraddr {
+            color: #888;
+            font-size: 0.9em;
+        }
+
+        .portdetails {
+            color: #555;
+            padding-left: 1em;
+        }
+
+        .portdetails pre {
+            display: inline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Supportbridge - Info</h1>
+    <table id="tunnelTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Connected Since</th>
+                <th>Ports</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Rows will be dynamically added here -->
+        </tbody>
+    </table>
+
+    <script>
+        // Some ports are typically reserved for specific protocols. We map the most common
+        // ones here. This is not exhaustive and can be extended as needed.
+        // The keys are the port numbers on the exposer and the values are functions that return
+        // additional HTML to be displayed in the table.
+        const default_exposed_ports = {
+            80: (server_port) => `<a href="http://${window.location.hostname}:${server_port}">http://${window.location.hostname}:${server_port}</a>`,
+            443: (server_port) => `<a href="https://${window.location.hostname}:${server_port}">https://${window.location.hostname}:${server_port}</a>`,
+            22: (server_port) => `<pre>ssh ${window.location.hostname} -p ${server_port}</pre>`,
+        }
+
+        async function fetchTunnelInfo() {
+            try {
+                const response = await fetch('/list');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const tunnelInfos = await response.json();
+                renderTable(tunnelInfos);
+            } catch (error) {
+                console.error('Error fetching tunnel info:', error);
+            }
+        }
+
+        function renderTable(tunnelInfos) {
+            const tableBody = document.querySelector('#tunnelTable tbody');
+            tableBody.innerHTML = ''; // Clear existing rows
+
+            tunnelInfos.forEach(tunnel => {
+                const rowHTML = `
+                    <tr>
+                        <td>${tunnel.name} <br /><span class="peeraddr">${tunnel.peer_addr}</span></td>
+                        <td>${tunnel.open_time}</td>
+                        <td>
+                            <ul>
+                                ${tunnel.ports.map(renderPort).join('')}
+                            </ul>
+                        </td>
+                    </tr>
+                `;
+                tableBody.insertAdjacentHTML('beforeend', rowHTML);
+            });
+        }
+
+        function renderPort(exposed_port) {
+            console.log("exposed_port", exposed_port, );
+            var details = "";
+            if (exposed_port.exposed_addr.port in default_exposed_ports) {
+                details = default_exposed_ports[exposed_port.exposed_addr.port](exposed_port.port);
+            }
+            return `<li>${exposed_port.port} &rarr; ${exposed_port.exposed_addr.address}:${exposed_port.exposed_addr.port}<span class="portdetails">${details}</span></li>`;
+        }
+
+        // Fetch and render the tunnel info on page load
+        fetchTunnelInfo();
+    </script>
+</body>
+</html>

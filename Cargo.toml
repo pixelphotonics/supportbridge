@@ -17,7 +17,7 @@ log = "0.4.22"
 serde = { version="1.0.204", features=["std", "derive"] }
 serde_json = "1.0.120"
 tabwriter = { version = "1.4.0", optional = true }
-tokio = { version = "1.38.0", features = ["rt", "sync", "macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.38.0", features = ["rt", "sync", "macros", "rt-multi-thread", "time", "fs"] }
 tokio-tungstenite = { version = "0.26", features = ["default"] } 
 tungstenite = { version = "0.26.0", features = ["default"] }
 url = "2.5.2"

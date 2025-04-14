@@ -5,6 +5,7 @@ use tokio::io::AsyncWriteExt;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::ops::RangeInclusive;
+use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Notify};
@@ -28,6 +29,7 @@ pub struct ServerOptions {
     pub port_range: RangeInclusive<u16>,
     pub overwrite_existing_connection: bool,
     pub overwrite_existing_exposer: bool,
+    pub root_file: Option<PathBuf>,
 }
 
 pub struct Tunnel {
@@ -381,6 +383,19 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, server: Arc<Mutex<T
     }
 }
 
+async fn root_html(
+    state: axum::extract::State<Arc<Mutex<TunnelServer>>>,
+) -> std::result::Result<axum::response::Html<String>, axum::http::StatusCode> {
+    if let Some(filepath) = state.lock().await.options.root_file.clone() {
+        let content = tokio::fs::read_to_string(filepath).await.map_err(|_| axum::http::StatusCode::NOT_FOUND)?;
+        Ok(axum::response::Html(content))
+    } else {
+        // Serve the default HTML file
+        let html_content = include_str!("html/index.html");
+        Ok(axum::response::Html(html_content.to_string()))
+    }
+}
+
 
 pub async fn serve(options: ServerOptions) -> Result<()> {
     let server = Arc::new(Mutex::new(TunnelServer {
@@ -391,6 +406,7 @@ pub async fn serve(options: ServerOptions) -> Result<()> {
 
     // build our application with a single route
     let app = axum::Router::new()
+        .route("/", axum::routing::get(root_html))
         .route("/list", axum::routing::get(list_tunnels))
         .route("/register", axum::routing::any(ws_handler))
         .with_state(server);

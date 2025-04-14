@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use anyhow::anyhow;
 use clap::{Parser, Subcommand};
-use supportbridge::{protocol::ExposedAddress, util::{self, parse_bind_address}};
+use supportbridge::{protocol::ExposedAddress, util::parse_bind_address};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -35,6 +37,10 @@ enum Command {
         /// The maximum port number to use when opening ports on the server.
         #[arg(long, default_value = "64000")]
         max_port: u16,
+
+        /// Optional path to the HTML file to serve at the server root. If not given, the server will serve a simple default page.
+        #[arg(short = 'r', long)]
+        html: Option<PathBuf>,
     },
 
     /// Run the websocket-to-TCP bridge
@@ -103,6 +109,7 @@ async fn main() -> anyhow::Result<()> {
             dont_overwrite_connection,
             min_port,
             max_port,
+            html,
         } => {
             use supportbridge::server;
 
@@ -111,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
                 port_range: min_port..=max_port,
                 overwrite_existing_connection: !dont_overwrite_connection,
                 overwrite_existing_exposer: !dont_overwrite_exposer,
+                root_file: html,
             };
 
             server::serve(server_options).await?;

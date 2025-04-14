@@ -158,12 +158,6 @@ impl From<JsonMessage> for axum::extract::ws::Message {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientInfo {
-    pub peer_addr: String,
-    pub uses_port: bool,
-}
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExposedServerPort {
