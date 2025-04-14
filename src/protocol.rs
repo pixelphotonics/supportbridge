@@ -130,6 +130,9 @@ pub enum JsonMessage {
     CloseChannel {
         /// The channel id to close.
         channel_id: ChannelId,
+
+        /// The reason for closing the channel.
+        error: Option<String>,
     },
 
     /// A new channel was initialized and the given id was assigned.

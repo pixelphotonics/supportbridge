@@ -56,6 +56,49 @@ where  WS: Sink<Message, Error = WsError>
     + std::marker::Send
     + 'static 
 {
+    async fn open_channel(&mut self, channel_id: ChannelId, exposed_address: ExposedAddress) -> Result<()> {
+        // Lookup in the whitelist
+        if !self.allowed_targets.iter().any(|allowed| *allowed == exposed_address) {
+            return Err(anyhow!("Address / port not allowed."));
+        }
+
+        let mut channels = self.channels.clone().lock_owned().await;
+
+        if let Some(existing_channel) = channels.get_mut(&channel_id) {
+            existing_channel.send_task.abort();
+            return Err(anyhow!("Channel id already in use. Closing channel to prevent mixups."));
+        }
+
+        // Open connection
+        let target_addr_string = format!("{}:{}", exposed_address.address, exposed_address.port);
+        let new_socket = TcpStream::connect(&target_addr_string).await?;
+        info!("Open socket to target: {}", target_addr_string);
+        let (target_read, target_write_half) = new_socket.into_split();
+
+        // Start sending task
+        let send_task = crate::tcp_to_ws_encoded(channel_id, target_read, self.out_sender.clone());
+
+        channels.insert(channel_id, ExposerChannel {
+            channel: channel_id,
+            tcp_sender: MutexTcpSender(Arc::new(Mutex::new(Some(target_write_half)))),
+            send_task: send_task.guarded_abort_handle(),
+        });
+
+        // When the channel is closed, e.g. when the target closes the connection, we need to remove it from the list
+        // clean up once the task is done
+        let channels = self.channels.clone();
+        let out_sender = self.out_sender.clone();
+        tokio::spawn(async move {
+            let _result = send_task.await;
+            log::info!("Channel task finished");
+            // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
+            let _ = out_sender.lock().await.send(JsonMessage::CloseChannel { channel_id, error: None }.into()).await;
+            channels.lock().await.remove(&channel_id);
+        });
+
+        Ok(())
+    }
+    
     async fn handle_text_msg(&mut self, msg_text: &str) -> Result<Option<JsonMessage>> {
         let msg_inner = serde_json::from_str(msg_text)?;
         match msg_inner {
@@ -67,50 +110,18 @@ where  WS: Sink<Message, Error = WsError>
                 Ok(Some(json_msg))
             },
             JsonMessage::OpenChannel { channel_id, exposed_address } => {
-                // Lookup in the whitelist
-                if !self.allowed_targets.iter().any(|allowed| *allowed == exposed_address) {
-                    return Err(anyhow!("Address / port not allowed."));
+                match self.open_channel(channel_id, exposed_address).await {
+                    Ok(_) => Ok(Some(JsonMessage::OpenChannelSuccessful { channel_id })),
+                    Err(e) => {
+                        log::error!("Error opening channel: {}", e);
+                        Ok(Some(JsonMessage::CloseChannel { channel_id, error: Some(e.to_string()) }))
+                    },
                 }
-
-                let mut channels = self.channels.clone().lock_owned().await;
-
-                if channels.contains_key(&channel_id) {
-                    return Err(anyhow!("Channel id already in use. Close the old channel first."));
-                }
-
-                // Open connection
-                let target_addr_string = format!("{}:{}", exposed_address.address, exposed_address.port);
-                let new_socket = TcpStream::connect(&target_addr_string).await?;
-                info!("Open socket to target: {}", target_addr_string);
-                let (target_read, target_write_half) = new_socket.into_split();
-
-                // Start sending task
-                let send_task = crate::tcp_to_ws_encoded(channel_id, target_read, self.out_sender.clone());
-
-                channels.insert(channel_id, ExposerChannel {
-                    channel: channel_id,
-                    tcp_sender: MutexTcpSender(Arc::new(Mutex::new(Some(target_write_half)))),
-                    send_task: send_task.guarded_abort_handle(),
-                });
-
-                // When the channel is closed, e.g. when the target closes the connection, we need to remove it from the list
-                // clean up once the task is done
-                let channels = self.channels.clone();
-                let out_sender = self.out_sender.clone();
-                tokio::spawn(async move {
-                    let _result = send_task.await;
-                    log::info!("Channel task finished");
-                    // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
-                    let _ = out_sender.lock().await.send(JsonMessage::CloseChannel { channel_id }.into()).await;
-                    channels.lock().await.remove(&channel_id);
-                });
-
-                Ok(Some(JsonMessage::OpenChannelSuccessful { channel_id }))
             },
-            JsonMessage::CloseChannel { channel_id } => {
+            JsonMessage::CloseChannel { channel_id, error } => {
                 if let Some(channel) = self.channels.lock().await.get_mut(&channel_id) {
                     // Aborting the task will lead to the clean-up task to run, which removes the channel from the list
-                    log::error!("Closing channel {}", channel_id);
+                    log::error!("Closing channel {}. Error: {:?}", channel_id, error);
                     channel.send_task.abort();
                 }
 

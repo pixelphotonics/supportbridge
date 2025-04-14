@@ -161,7 +161,7 @@ async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exp
         log::info!("Channel task finished: {}", channel_id);
         if let Ok(mut tunnel) = get_tunnel_lock(&tunnel).await {
             // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
-            let _ = tunnel.server_write.lock().await.send(JsonMessage::CloseChannel { channel_id }.into()).await;
+            let _ = tunnel.server_write.lock().await.send(JsonMessage::CloseChannel { channel_id, error: None }.into()).await;
             tunnel.channels.remove(&channel_id);
         }
     });
@@ -227,11 +227,16 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                             log::error!("Channel not found: {}", channel_id);
                         }
                     },
-                    JsonMessage::CloseChannel { channel_id } => {
+                    JsonMessage::CloseChannel { channel_id, error } => {
                         log::info!("Channel closed: {}", channel_id);
                         let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
                         if let Some(channel) = tunnel_lock.channels.get_mut(&channel_id) {
                             channel.send_task.abort();
+                            if let Some(reason) = error {
+                                log::error!("Channel closed with error: {} - {}", channel_id, reason);
+                            } else {
+                                log::info!("Channel closed: {}", channel_id);
+                            }
                         }
                         else {
                             // If the channel is not in the list, we don't consider this an error.
