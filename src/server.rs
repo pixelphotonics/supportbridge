@@ -3,14 +3,14 @@ use futures::{SinkExt, StreamExt};
 use log::info;
 use tokio::io::AsyncWriteExt;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, Weak};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Notify};
-use tungstenite::http::Uri;
 
-use crate::protocol::{ChannelId, ExposedAddress, ExposerInfo, JsonMessage};
-use crate::util::{spawn_guarded, GuardedAbortHandle, GuardedJoinHandle};
+use crate::protocol::{ChannelId, ChannelInfo, ExposedAddress, ExposedServerPort, JsonMessage, TunnelInfo};
+use crate::util::{now, spawn_guarded, GuardedAbortHandle, GuardedJoinHandle};
 
 type Message = axum::extract::ws::Message;
 type WsSender = futures::stream::SplitSink<axum::extract::ws::WebSocket, Message>;
@@ -40,7 +40,9 @@ pub struct Tunnel {
 /// Multiple channels can be created on a single tunnel, e.g.
 /// for multiple clients to connect or for multiple ports to be exposed.
 pub struct TunnelState {
-    info: ExposerInfo,
+    name: String,
+    open_time: String,
+    peer_addr: String,
     server_write: Arc<Mutex<WsSender>>,    
     ports: Vec<ExposedPort>,
     channels: HashMap<u8, Channel>,
@@ -48,39 +50,20 @@ pub struct TunnelState {
 
 struct ExposedPort {
     exposed_addr: ExposedAddress,
+    server_port: u16,
     listen_task: GuardedJoinHandle<Result<()>>,
 }
 
 struct Channel {
-    id: u8,
+    info: ChannelInfo,
+
     tcp_sender: tokio::net::tcp::OwnedWriteHalf,
     send_task: GuardedAbortHandle,
     open_success: Arc<Notify>,
-    exposed_addr: ExposedAddress,
 }
 
-struct CallbackHandler {
-    uri: Option<Uri>,
-}
 
-impl tungstenite::handshake::server::Callback for &mut CallbackHandler {
-    fn on_request(
-        self,
-        request: &tungstenite::handshake::server::Request,
-        response: tungstenite::handshake::server::Response,
-    ) -> std::result::Result<
-        tungstenite::handshake::server::Response,
-        tungstenite::handshake::server::ErrorResponse,
-    > {
-        log::info!("URI: {}", request.uri());
-
-        self.uri = Some(request.uri().clone());
-
-        Ok(response)
-    }
-}
-
-async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListener> {
+async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<(u16, TcpListener)> {
     log::debug!("Open port in range: {:?}", port_range);
     for port in port_range.clone() {
         log::debug!("Trying port: {}", port);
@@ -88,7 +71,7 @@ async fn open_tcp_listener(port_range: RangeInclusive<u16>) -> Result<TcpListene
         match listener {
             Ok(listener) => {
                 log::info!("Opened port: {}", port);
-                return Ok(listener);
+                return Ok((port, listener));
             }
             Err(e) => {
                 log::debug!("Failed to open port: {}", e);
@@ -131,6 +114,8 @@ async fn get_tunnel_lock(tunnel: &Weak<Mutex<TunnelState>>) -> Result<tokio::syn
 async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exposed_address: ExposedAddress) -> Result<()> {
     let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
 
+    let peer_addr = stream.peer_addr()?;
+
     let ws_out = tunnel_lock.server_write.clone();
     let (tcp_read, tcp_write) = stream.into_split();
     let open_success = Arc::new(Notify::new());
@@ -141,11 +126,15 @@ async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exp
     let channel_task = spawn_guarded(serve_channel(tcp_read, channel_id, exposed_address.clone(), ws_out, open_success.clone()));
 
     let channel = Channel {
-        id: channel_id,
+        info: ChannelInfo {
+            id: channel_id,
+            exposed: exposed_address,
+            peer_addr: format!("{:?}", peer_addr),
+            open_time: now(),
+        },
         tcp_sender: tcp_write,
         send_task: channel_task.guarded_abort_handle(),
         open_success,
-        exposed_addr: exposed_address,
     };
     
     tunnel_lock
@@ -169,8 +158,7 @@ async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exp
 }
 
 
-async fn listen_tcp_port(port_range: RangeInclusive<u16>, tunnel: Weak<Mutex<TunnelState>>, exposed_address: ExposedAddress) -> Result<()> {
-    let listener = open_tcp_listener(port_range).await?;
+async fn listen_tcp_port(listener: TcpListener, tunnel: Weak<Mutex<TunnelState>>, exposed_address: ExposedAddress) -> Result<()> {
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
         info!("Peer address: {}", peer);
@@ -205,8 +193,10 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                         let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
 
                         for exposed_addr in exposed {
+                            let (port, listener) = open_tcp_listener(options.port_range.clone()).await?;
+
                             let listen_task = spawn_guarded(listen_tcp_port(
-                                options.port_range.clone(),
+                                listener,
                                 tunnel.clone(),
                                 exposed_addr.clone(),
                             ));
@@ -214,6 +204,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                             tunnel_lock.ports.push(ExposedPort {
                                 exposed_addr,
                                 listen_task,
+                                server_port: port,
                             });
                         }
                     },
@@ -291,24 +282,19 @@ async fn open_tunnel(
         let tunnel_state = tunnel.state.lock().await;
         println!(
             "Dropping existing tunnel: {}, {}",
-            tunnel_state.info.name, tunnel_state.info.peer_addr
+            tunnel_state.name, tunnel_state.peer_addr
         );
         // Dropping `tunnel` will close the connection, as the guarded abort handle is dropped
     }
 
-    // Create new channel
+    // Create new tunnel
     let tunnel_state = Arc::new(Mutex::new(TunnelState {
-        info: ExposerInfo {
-            name: name.clone(),
-            open_time: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-            connected_client: None,
-            peer_addr,
-            open_port: None,
-        },
         server_write: Arc::new(Mutex::new(ws_out)),
         channels: HashMap::new(),
         ports: Vec::new(),
+        name: name.clone(),
+        open_time: now(),
+        peer_addr,
     }));
 
     let task = spawn_guarded(serve_tunnel(
@@ -344,7 +330,20 @@ async fn list_tunnels(state: axum::extract::State<Arc<Mutex<TunnelServer>>>) -> 
     let infos = futures::stream::iter(&server_state.tunnels)
         .then(|(_, tunnel)| async {
             let tunnel_state = tunnel.state.lock().await;
-            tunnel_state.info.clone()
+            TunnelInfo {
+                name: tunnel_state.name.clone(),
+                open_time: tunnel_state.open_time.clone(),
+                peer_addr: tunnel_state.peer_addr.clone(),
+                ports: tunnel_state.ports.iter().map(|port| ExposedServerPort {
+                    port: port.server_port,
+                    exposed_addr: port.exposed_addr.clone(),
+                }).collect::<Vec<_>>(),
+                channels: tunnel_state
+                    .channels
+                    .values()
+                    .map(|channel| channel.info.clone())
+                    .collect::<Vec<_>>(),
+            }
         })
         .collect::<Vec<_>>()
         .await;
@@ -356,7 +355,7 @@ async fn list_tunnels(state: axum::extract::State<Arc<Mutex<TunnelServer>>>) -> 
 async fn ws_handler(
     ws: axum::extract::WebSocketUpgrade,
     state: axum::extract::State<Arc<Mutex<TunnelServer>>>,
-    //addr: axum::extract::ConnectInfo<tokio::net::unix::SocketAddr>,
+    addr: axum::extract::ConnectInfo<SocketAddr>,
     query: axum::extract::Query<HashMap<String, String>>,
 ) -> std::result::Result<axum::response::Response, axum::http::StatusCode> {
 
@@ -365,14 +364,14 @@ async fn ws_handler(
         .cloned()
         .ok_or(axum::http::StatusCode::BAD_REQUEST)?;
 
-    //println!("WS connection at {:?} connected.", addr.0);
-    Ok(ws.on_upgrade(move |socket| handle_socket(socket, state.0, name)))
+    log::debug!("Websocket connection at {:?} connected.", addr.0);
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, state.0, name, addr.0)))
 }
 
 /// Actual websocket statemachine (one will be spawned per connection)
-async fn handle_socket(socket: axum::extract::ws::WebSocket, server: Arc<Mutex<TunnelServer>>, name: String) {
+async fn handle_socket(socket: axum::extract::ws::WebSocket, server: Arc<Mutex<TunnelServer>>, name: String, addr: SocketAddr) {
     let (sender, receiver) = socket.split();
-    match open_tunnel(server, sender, receiver, format!("Unknown"), name.clone()).await {
+    match open_tunnel(server, sender, receiver, format!("{:?}", addr), name.clone()).await {
         Ok(_) => {
             log::info!("Tunnel opened: '{}'", name);
         }
@@ -384,12 +383,6 @@ async fn handle_socket(socket: axum::extract::ws::WebSocket, server: Arc<Mutex<T
 
 
 pub async fn serve(options: ServerOptions) -> Result<()> {
-    use axum::{
-        routing::get,
-        Router,
-        routing::any,
-    };
-
     let server = Arc::new(Mutex::new(TunnelServer {
         tunnels: HashMap::new(),
         options: options.clone(),
@@ -397,16 +390,15 @@ pub async fn serve(options: ServerOptions) -> Result<()> {
     }));
 
     // build our application with a single route
-    let app = Router::new()
-        .route("/", get(|| async { "Hello, World!" }))
-        .route("/list", get(list_tunnels))
-        .route("/register", any(ws_handler))
+    let app = axum::Router::new()
+        .route("/list", axum::routing::get(list_tunnels))
+        .route("/register", axum::routing::any(ws_handler))
         .with_state(server);
 
     // run our app with hyper, listening globally on port 3000
     let listener = TcpListener::bind(&options.listen_addr).await?;
     info!("Listening on {}", options.listen_addr);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
 }

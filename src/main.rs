@@ -144,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
             server_addr,
             verbose,
         } => {
-            use futures::StreamExt;
+            /*use futures::StreamExt;
             let request = util::build_request(&server_addr, supportbridge::protocol::ServerPath::List)?;
             let (mut ws_server_stream, _) = tokio_tungstenite::connect_async(request).await?;
 
@@ -153,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
                 match msg {
                     tungstenite::Message::Text(textmsg) => {
                         if let Ok(infos) = serde_json::from_str::<
-                            Vec<supportbridge::protocol::ExposerInfo>,
+                            Vec<supportbridge::protocol::TunnelInfo>,
                         >(&textmsg)
                         {
                             // Only for feature "tabwriter"
@@ -219,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
                         log::trace!("Other message type");
                     }
                 }
-            }
+            }*/
         }
     }
 

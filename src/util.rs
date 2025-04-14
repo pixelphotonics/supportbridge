@@ -153,6 +153,14 @@ impl Drop for GuardedAbortHandle {
     }
 }
 
+
+/// Returns the current time as ISO-formatted string
+pub fn now() -> String {
+    chrono::Utc::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

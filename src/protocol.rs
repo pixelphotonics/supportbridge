@@ -164,28 +164,47 @@ pub struct ClientInfo {
     pub uses_port: bool,
 }
 
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExposerInfo {
-    pub name: String,
+pub struct ExposedServerPort {
+    /// The open port on the server
+    pub port: u16,
 
-    /// Time when the channel was opened
-    pub open_time: String,
-    pub peer_addr: String,
-    pub open_port: Option<u16>,
-
-    /// The name of the connected client
-    pub connected_client: Option<ClientInfo>,
+    /// The address / port from the POV of the exposer which this port maps to
+    pub exposed_addr: ExposedAddress,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelInfo {
+    /// Name of the exposer machine (typically the hostname)
+    pub name: String,
+
+    /// Time when the tunnel was opened
+    pub open_time: String,
+
+    /// The address of the exposer
+    pub peer_addr: String,
+
+    /// Ports on the server
+    pub ports: Vec<ExposedServerPort>,
+
+    /// The name of the connected client
+    pub channels: Vec<ChannelInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChannelInfo {
 
     pub id: ChannelId,
 
     /// The exposed port on the exposer
-    pub port: u16,
+    pub exposed: ExposedAddress,
 
-    /// The target address (from the POV of the exposer).
-    pub address: String,
+    /// The client address that is currently connected to this channel
+    pub peer_addr: String,
+
+    /// The time when the channel was opened
+    pub open_time: String,
 }
 
 #[derive(Debug)]
