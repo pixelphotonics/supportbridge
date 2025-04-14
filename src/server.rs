@@ -9,11 +9,12 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex, Notify};
 use tungstenite::http::Uri;
 
-use crate::protocol::{ChannelId, ExposedAddress, ExposerInfo, JsonMessage, ServerPath};
+use crate::protocol::{ChannelId, ExposedAddress, ExposerInfo, JsonMessage};
 use crate::util::{spawn_guarded, GuardedAbortHandle, GuardedJoinHandle};
 
-type WsSender = futures::stream::SplitSink<tokio_tungstenite::WebSocketStream<TcpStream>, tungstenite::Message>;
-type WsReceiver = futures::stream::SplitStream<tokio_tungstenite::WebSocketStream<TcpStream>>;
+type Message = axum::extract::ws::Message;
+type WsSender = futures::stream::SplitSink<axum::extract::ws::WebSocket, Message>;
+type WsReceiver = futures::stream::SplitStream<axum::extract::ws::WebSocket>;
 
 pub struct TunnelServer {
     pub tunnels: HashMap<String, Tunnel>,
@@ -109,8 +110,8 @@ async fn serve_channel(tcp_read: tokio::net::tcp::OwnedReadHalf, channel_id: Cha
         .clone()
         .lock_owned()
         .await
-        .send(JsonMessage::OpenChannel { channel_id, exposed_address }.encode_ws())
-        .await?;
+        .send(JsonMessage::OpenChannel { channel_id, exposed_address }.into())
+        .await;
 
     open_notify.notified().await;
 
@@ -136,7 +137,7 @@ async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exp
     let open_success = Arc::new(Notify::new());
 
     // Find free channel id
-    let channel_id = (0..ChannelId::MAX).find(|id| tunnel_lock.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
+    let channel_id = (0..ChannelId::MAX).find(|id| !tunnel_lock.channels.contains_key(id)).ok_or_else(|| anyhow!("All channels occupied."))?;
 
     let channel_task = spawn_guarded(serve_channel(tcp_read, channel_id, exposed_address.clone(), ws_out, open_success.clone()));
 
@@ -152,13 +153,15 @@ async fn create_channel(stream: TcpStream, tunnel: Weak<Mutex<TunnelState>>, exp
         .channels
         .insert(channel_id, channel);
 
+    log::info!("Started channel: {}", channel_id);
+
     // clean up once the task is done
     tokio::spawn(async move {
         let _result = channel_task.await;
-        log::info!("Channel task finished");
+        log::info!("Channel task finished: {}", channel_id);
         if let Ok(mut tunnel) = get_tunnel_lock(&tunnel).await {
             // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
-            let _ = tunnel.server_write.lock().await.send(JsonMessage::CloseChannel { channel_id }.encode_ws()).await;
+            let _ = tunnel.server_write.lock().await.send(JsonMessage::CloseChannel { channel_id }.into()).await;
             tunnel.channels.remove(&channel_id);
         }
     });
@@ -189,13 +192,13 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
     // Register and wait for "ok" from exposer
     {
         let tunnel_lock = get_tunnel_lock(&tunnel).await?;
-        tunnel_lock.server_write.lock().await.send(JsonMessage::OpenTunnel {  }.encode_ws()).await?;
+        tunnel_lock.server_write.lock().await.send(JsonMessage::OpenTunnel {  }.into()).await?;
     }
 
     // Process incoming messages
     while let Some(msg) = ws_in.next().await {
         match msg {
-            Ok(tungstenite::Message::Text(msg_text)) => {
+            Ok(Message::Text(msg_text)) => {
                 let msg_inner = serde_json::from_str(msg_text.as_str())?;
                 match msg_inner {
                     JsonMessage::OpenTunnelSuccess { exposed } => {
@@ -237,7 +240,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                     _ => {}
                 }
             }
-            Ok(tungstenite::Message::Binary(encoded_msg)) => {
+            Ok(Message::Binary(encoded_msg)) => {
                 if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&encoded_msg[..]) {
                     let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
                     if let Some(channel) = tunnel_lock.channels.get_mut(&msg.channel_id) {
@@ -268,7 +271,8 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
 
 async fn open_tunnel(
     server: Arc<Mutex<TunnelServer>>,
-    ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
+    ws_out: WsSender,
+    ws_in: WsReceiver,
     peer_addr: String,
     name: String,
 ) -> Result<()>
@@ -289,7 +293,6 @@ async fn open_tunnel(
     }
 
     // Create new channel
-    let (ws_out, ws_in) = ws_stream.split();
     let tunnel_state = Arc::new(Mutex::new(TunnelState {
         info: ExposerInfo {
             name: name.clone(),
@@ -331,105 +334,75 @@ async fn open_tunnel(
     Ok(())
 }
 
-async fn handle_connection(
-    server: Arc<Mutex<TunnelServer>>,
-    listen_stream: TcpStream,
-) -> Result<()> {
-    let mut callback_handler = CallbackHandler { uri: None };
-    let peer_addr = listen_stream
-        .peer_addr()
-        .map(|a| a.to_string())
-        .unwrap_or_default();
-    let mut ws_stream =
-        tokio_tungstenite::accept_hdr_async(listen_stream, &mut callback_handler).await?;
 
-    let uri = callback_handler
-        .uri
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No URI found"))?;
-    log::debug!("URI: {}", uri);
-    let server_cmd = ServerPath::from_uri(uri)?;
+async fn list_tunnels(state: axum::extract::State<Arc<Mutex<TunnelServer>>>) -> axum::response::Json<serde_json::Value> {
+    let server_state = state.lock().await;
+    let infos = futures::stream::iter(&server_state.tunnels)
+        .then(|(_, tunnel)| async {
+            let tunnel_state = tunnel.state.lock().await;
+            tunnel_state.info.clone()
+        })
+        .collect::<Vec<_>>()
+        .await;
 
-    match server_cmd {
-        ServerPath::Register { name } => {
-            log::debug!("Register server: '{}'", &name);
-            open_tunnel(server, ws_stream, peer_addr, name).await?;
-        }
-        /*ServerPath::Connect { name } => {
-            let mut server_state = server.lock().await;
-            if let Some(channel) = server_state.tunnels.get_mut(&name) {
-                log::info!("Connect to channel: {}", name);
-
-                let ws_out = channel.server_write.clone();
-                let ws_in = channel.server_read.clone();
-
-                let task = spawn_guarded(async move {
-                    let (client_write, client_read) = ws_stream.split();
-                    let mut ws_out = ws_out.lock_owned().await;
-                    ws_out
-                        .send(tungstenite::Message::Text("init".into()))
-                        .await?;
-
-                    crate::ws_bridge(
-                        ws_in.lock_owned().await,
-                        ws_out,
-                        Box::new(client_read),
-                        Box::new(client_write),
-                    ).await?;
-
-                    Ok(())
-                });
-
-                channel.set_channel_user(task, peer_addr, false, server.clone());
-            } else {
-                log::error!("Channel not found: {}", name);
-                ws_stream.close(None).await?;
-            }
-        }*/
-        ServerPath::List => {
-            let server_state = server.lock().await;
-            let infos = futures::stream::iter(&server_state.tunnels)
-                .then(|(_, tunnel)| async {
-                    let tunnel_state = tunnel.state.lock().await;
-                    tunnel_state.info.clone()
-                })
-                .collect::<Vec<_>>()
-                .await;
-
-            let data = serde_json::to_string(&infos)?;
-            ws_stream.send(tungstenite::Message::Text(data.into())).await?;
-            ws_stream.close(None).await?;
-        }
-        _ => {
-            log::error!("Invalid command: {:?}", server_cmd);
-            ws_stream.close(None).await?;
-        }
-    }
-
-    Ok(())
+    axum::response::Json(serde_json::json!(infos))
 }
 
+
+async fn ws_handler(
+    ws: axum::extract::WebSocketUpgrade,
+    state: axum::extract::State<Arc<Mutex<TunnelServer>>>,
+    //addr: axum::extract::ConnectInfo<tokio::net::unix::SocketAddr>,
+    query: axum::extract::Query<HashMap<String, String>>,
+) -> std::result::Result<axum::response::Response, axum::http::StatusCode> {
+
+    let name = query
+        .get("name")
+        .cloned()
+        .ok_or(axum::http::StatusCode::BAD_REQUEST)?;
+
+    //println!("WS connection at {:?} connected.", addr.0);
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, state.0, name)))
+}
+
+/// Actual websocket statemachine (one will be spawned per connection)
+async fn handle_socket(socket: axum::extract::ws::WebSocket, server: Arc<Mutex<TunnelServer>>, name: String) {
+    let (sender, receiver) = socket.split();
+    match open_tunnel(server, sender, receiver, format!("Unknown"), name.clone()).await {
+        Ok(_) => {
+            log::info!("Tunnel opened: '{}'", name);
+        }
+        Err(e) => {
+            log::error!("Error opening tunnel: '{}' - {}", name, e);
+        }
+    }
+}
+
+
 pub async fn serve(options: ServerOptions) -> Result<()> {
-    let listener = TcpListener::bind(&options.listen_addr).await?;
-    info!("Listening on {}", options.listen_addr);
+    use axum::{
+        routing::get,
+        Router,
+        routing::any,
+    };
 
     let server = Arc::new(Mutex::new(TunnelServer {
         tunnels: HashMap::new(),
-        options,
+        options: options.clone(),
         id_counter: 0,
     }));
 
-    while let Ok((stream, _)) = listener.accept().await {
-        let peer = stream.peer_addr()?;
-        info!("Peer address: {}", peer);
+    // build our application with a single route
+    let app = Router::new()
+        .route("/", get(|| async { "Hello, World!" }))
+        .route("/list", get(list_tunnels))
+        .route("/register", any(ws_handler))
+        .with_state(server);
 
-        match handle_connection(server.clone(), stream).await {
-            Ok(_) => {}
-            Err(e) => {
-                log::error!("Error handling connection: {:?}", e);
-            }
-        }
-    }
+    // run our app with hyper, listening globally on port 3000
+    let listener = TcpListener::bind(&options.listen_addr).await?;
+    info!("Listening on {}", options.listen_addr);
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

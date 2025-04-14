@@ -63,32 +63,37 @@ where
 
 /// Take a TCP stream and relay all binary messages from the TCP stream
 /// to the websocket stream using the custom protocol.
-pub fn tcp_to_ws_encoded<TRx, WTx>(
+pub fn tcp_to_ws_encoded<TRx, WTx, M, E>(
     channel_id: ChannelId,
     mut rx_tcp: TRx,
     mut tx_ws: Arc<tokio::sync::Mutex<WTx>>,
 ) -> GuardedJoinHandle<Result<()>>
 where
     TRx: AsyncRead + Unpin  + Send + 'static,
-    WTx: Sink<Message, Error = WsError>  + Unpin + Send + 'static,
+    WTx: Sink<M, Error = E>  + Unpin + Send + 'static,
+    M: From<Vec<u8>> + Send + 'static,
+    E: Error + Send + 'static,
 {
     spawn_guarded(async move {
         log::debug!("Starting TCP->WS relay");
         loop {
             let mut buf = vec![0; 1024];
-            let n = rx_tcp.read(buf.as_mut_slice()).await?;
+            let n = rx_tcp.read(&mut buf[1..]).await?;
             if n == 0 {
                 break;
             }
 
-            let msg = BinaryMessage::encode_ws(channel_id, &buf[..n]);
+            buf[0] = channel_id;
+            buf.truncate(n + 1);
+
+            let msg = M::from(buf);
 
             log::debug!("TCP->WS: {} bytes", n);
             tx_ws
                 .lock()
                 .await
                 .send(msg)
-                .await?;
+                .await;
         }
 
         Ok(())

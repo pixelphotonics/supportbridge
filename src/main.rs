@@ -50,6 +50,7 @@ enum Command {
         bind: String,
 
         /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
+        #[arg(required = true)]
         target: Vec<String>,
 
         /// Optionally, the address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.

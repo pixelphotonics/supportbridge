@@ -64,7 +64,6 @@ where  WS: Sink<Message, Error = WsError>
                 let json_msg = JsonMessage::OpenTunnelSuccess {
                     exposed: self.allowed_targets.clone(),
                 };
-                self.out_sender.lock().await.send(json_msg.encode_ws()).await?;
                 Ok(Some(json_msg))
             },
             JsonMessage::OpenChannel { channel_id, exposed_address } => {
@@ -102,7 +101,7 @@ where  WS: Sink<Message, Error = WsError>
                     let _result = send_task.await;
                     log::info!("Channel task finished");
                     // If the WS socket to the exposer is still intact, let the exposer know that the channel is closed.
-                    let _ = out_sender.lock().await.send(JsonMessage::CloseChannel { channel_id }.encode_ws()).await;
+                    let _ = out_sender.lock().await.send(JsonMessage::CloseChannel { channel_id }.into()).await;
                     channels.lock().await.remove(&channel_id);
                 });
 
@@ -176,7 +175,7 @@ where
         // If applicable, send the response back to the server
         match response {
             Ok(Some(msg)) => {
-                exposer.out_sender.lock().await.send(msg.encode_ws()).await?;
+                exposer.out_sender.lock().await.send(msg.into()).await?;
             },
             Ok(None) => {
                 // No action needed
@@ -184,7 +183,7 @@ where
             Err(e) => {
                 log::error!("Error handling message: {}", e);
                 let json_err = JsonMessage::Error { message: e.to_string() };
-                exposer.out_sender.lock().await.send(json_err.encode_ws()).await?;
+                exposer.out_sender.lock().await.send(json_err.into()).await?;
             }
         }
     }

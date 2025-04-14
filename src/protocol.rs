@@ -52,13 +52,6 @@ pub struct BinaryMessage<'a> {
 }
 
 impl<'a> BinaryMessage<'a> {
-    pub fn encode_ws(channel_id: ChannelId, data: &[u8]) -> tungstenite::Message {
-        let mut out_buf = Vec::with_capacity(data.len() + 1);
-        out_buf.push(channel_id);
-        out_buf.extend_from_slice(data);
-        tungstenite::Message::Binary(out_buf.into())
-    }
-
     pub fn from_ws(in_data: &'a [u8]) -> Option<Self> {
         if in_data.len() > 1 {
             Some (Self {
@@ -150,10 +143,15 @@ pub enum JsonMessage {
     },
 }
 
-impl JsonMessage {
-    pub fn encode_ws(&self) -> tungstenite::Message {
-        let msg = serde_json::to_string(self).unwrap();
-        tungstenite::Message::Text(msg.into())
+impl Into<tungstenite::Message> for JsonMessage {
+    fn into(self) -> tungstenite::Message {
+        tungstenite::Message::Text(serde_json::to_string(&self).unwrap().into())
+    }
+}
+
+impl Into<axum::extract::ws::Message> for JsonMessage {
+    fn into(self) -> axum::extract::ws::Message {
+        axum::extract::ws::Message::Text(serde_json::to_string(&self).unwrap().into())
     }
 }
 
