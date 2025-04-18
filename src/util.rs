@@ -41,9 +41,9 @@ pub fn build_request(
 
     let base_path = parsed_url.path().to_string();
     let path_and_query = if base_path.ends_with('/') {
-        format!("{}{}", base_path, command.to_string())
+        format!("{}{}", base_path, command)
     } else {
-        format!("{}/{}", base_path, command.to_string())
+        format!("{}/{}", base_path, command)
     };
 
     log::info!(
@@ -77,7 +77,7 @@ pub fn build_request(
         );
 
     // use username / password info if available
-    let req = if parsed_url.username().len() > 0 || parsed_url.password().is_some() {
+    let req = if !parsed_url.username().is_empty() || parsed_url.password().is_some() {
         use base64::prelude::*;
         let auth = format!(
             "{}:{}",

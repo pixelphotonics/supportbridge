@@ -17,49 +17,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub type WsError = tungstenite::error::Error;
 pub type WsResult = std::result::Result<Message, WsError>;
 
-pub trait WriteBinary {
-    fn write_binary(&mut self, data: &[u8]) -> impl std::future::Future<Output = Result<()>> + std::marker::Send;
-}
-
-impl<T> WriteBinary for T
-where
-    T: AsyncWrite + Unpin + std::marker::Send,
-{
-    async fn write_binary(&mut self, data: &[u8]) -> Result<()> {
-        self.write_all(data).await?;
-        Ok(())
-    }
-}
-
-/// Take a TCP stream and relay all binary messages from the TCP stream
-/// to the websocket stream.
-pub fn tcp_to_ws<TRx, WTx>(
-    mut rx_tcp: TRx,
-    mut tx_ws: impl DerefMut<Target = WTx> + Send + 'static,
-) -> GuardedJoinHandle<Result<()>>
-where
-    TRx: AsyncRead + Unpin  + Send + 'static,
-    WTx: Sink<Message, Error = WsError>  + Unpin + Send + 'static,
-{
-    spawn_guarded(async move {
-        log::debug!("Starting TCP->WS relay");
-        loop {
-            let mut buf = vec![0; 1024];
-            let n = rx_tcp.read(buf.as_mut_slice()).await?;
-            if n == 0 {
-                break;
-            }
-
-            log::debug!("TCP->WS: {} bytes", n);
-            tx_ws
-                .send(tungstenite::Message::Binary(tungstenite::Bytes::copy_from_slice(&buf[..n])))
-                .await?;
-        }
-
-        Ok(())
-    })
-}
-
 
 /// Take a TCP stream and relay all binary messages from the TCP stream
 /// to the websocket stream using the custom protocol.

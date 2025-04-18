@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Result};
 use futures::stream::SplitSink;
 use futures::{Sink, SinkExt, Stream, StreamExt};
-use log::{debug, info};
 use tungstenite::Message;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -14,27 +13,11 @@ type WsError = tungstenite::error::Error;
 type WsResult = std::result::Result<Message, WsError>;
 
 use crate::protocol::{ChannelId, ExposedAddress, JsonMessage, ServerPath};
-use crate::util::{spawn_guarded, GuardedAbortHandle};
-use crate::{connect_to_server, WriteBinary};
-
-struct MutexTcpSender(Arc<Mutex<Option<tokio::net::tcp::OwnedWriteHalf>>>);
-
-impl WriteBinary for MutexTcpSender {
-    async fn write_binary(&mut self, data: &[u8]) -> Result<()> {
-        if let Some(target_write) = self.0.lock().await.as_mut() {
-            log::debug!("Forwarding message to target, {} bytes", data.len());
-            target_write.write_all(data).await?;
-        } else {
-            log::warn!("No target socket available. Init message required.");
-        }
-
-        Ok(())
-    }
-}
+use crate::util::GuardedAbortHandle;
+use crate::connect_to_server;
 
 struct ExposerChannel {
-    channel: ChannelId,
-    tcp_sender: MutexTcpSender,
+    tcp_sender: tokio::net::tcp::OwnedWriteHalf,
     send_task: GuardedAbortHandle,
 }
 
@@ -72,15 +55,14 @@ where  WS: Sink<Message, Error = WsError>
         // Open connection
         let target_addr_string = format!("{}:{}", exposed_address.address, exposed_address.port);
         let new_socket = TcpStream::connect(&target_addr_string).await?;
-        info!("Open socket to target: {}", target_addr_string);
+        log::info!("Chanel {}: Open socket to target: {}", channel_id, target_addr_string);
         let (target_read, target_write_half) = new_socket.into_split();
 
         // Start sending task
         let send_task = crate::tcp_to_ws_encoded(channel_id, target_read, self.out_sender.clone());
 
         channels.insert(channel_id, ExposerChannel {
-            channel: channel_id,
-            tcp_sender: MutexTcpSender(Arc::new(Mutex::new(Some(target_write_half)))),
+            tcp_sender: target_write_half,
             send_task: send_task.guarded_abort_handle(),
         });
 
@@ -134,7 +116,7 @@ where  WS: Sink<Message, Error = WsError>
     async fn handle_binary_msg(&mut self, data: tungstenite::Bytes) -> Result<Option<JsonMessage>> {
         if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&data[..]) {
             if let Some(channel) = self.channels.lock().await.get_mut(&msg.channel_id) {
-                channel.tcp_sender.write_binary(msg.data).await?;
+                channel.tcp_sender.write_all(msg.data).await?;
             } else {
                 return Err(anyhow!("Unknown channel id: {}", msg.channel_id));
             }
@@ -206,11 +188,11 @@ where
 /// In order to connect the exposer with the server, a third-party relay needs to be used.
 pub async fn listen_to_ws(bind: SocketAddr, allowed_targets: Vec<ExposedAddress>) -> Result<()> {
     let listener = TcpListener::bind(bind).await?;
-    info!("Exposing to {}", bind);
+    log::info!("Exposing to {}", bind);
 
     while let Ok((stream, _)) = listener.accept().await {
         let peer = stream.peer_addr()?;
-        info!("Peer address: {}", peer);
+        log::info!("Peer address: {}", peer);
         let ws_stream = tokio_tungstenite::accept_async(stream).await?;
 
         tokio::spawn(handle_connection(ws_stream, allowed_targets.clone()));

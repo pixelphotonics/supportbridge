@@ -95,7 +95,7 @@ async fn serve_channel(tcp_read: tokio::net::tcp::OwnedReadHalf, channel_id: Cha
         .lock_owned()
         .await
         .send(JsonMessage::OpenChannel { channel_id, exposed_address }.into())
-        .await;
+        .await?;
 
     open_notify.notified().await;
 
@@ -241,8 +241,8 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                 if let Some(msg) = crate::protocol::BinaryMessage::from_ws(&encoded_msg[..]) {
                     let mut tunnel_lock = get_tunnel_lock(&tunnel).await?;
                     if let Some(channel) = tunnel_lock.channels.get_mut(&msg.channel_id) {
-                        if let Err(_) = channel.tcp_sender.write_all(msg.data).await {
-                            log::error!("Error writing to TCP stream, dropping channel.");
+                        if let Err(e) = channel.tcp_sender.write_all(msg.data).await {
+                            log::error!("Error writing to TCP stream, dropping channel: {}", e);
                             channel.send_task.abort();
                         }
                     } else {
