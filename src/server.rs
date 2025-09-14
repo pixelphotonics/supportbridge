@@ -181,7 +181,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
     // Register and wait for "ok" from exposer
     {
         let tunnel_lock = get_tunnel_lock(&tunnel).await?;
-        tunnel_lock.server_write.lock().await.send(JsonMessage::OpenTunnel {  }.into()).await?;
+        tunnel_lock.server_write.lock().await.send(JsonMessage::OpenTunnel { protocol_version: crate::protocol::PROTOCOL_VERSION }.into()).await?;
     }
 
     // Process incoming messages

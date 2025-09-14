@@ -43,6 +43,7 @@ use serde::{Deserialize, Serialize};
 use tungstenite::http::Uri;
 
 pub type ChannelId = u8;
+pub const PROTOCOL_VERSION: u32 = 1;
 
 /// Message sent between client and exposer.
 /// As a websocket message, this is just the channel id (single byte) followed by the data.
@@ -107,9 +108,9 @@ impl TryFrom<String> for ExposedAddress {
 pub enum JsonMessage {
     /// Initiate a new tunnel connection. This is sent from the server to the exposer
     /// once in the beginning.
-    /// The exposer will respond etierh with `OpenTunnelSuccess` or `Error`.
+    /// The exposer will respond either with `OpenTunnelSuccess` or `Error`.
     OpenTunnel {
-        
+        protocol_version: u32,
     },
 
     /// A new tunnel was opened. This is sent from the exposer to the server.

@@ -84,7 +84,13 @@ where  WS: Sink<Message, Error = WsError>
     async fn handle_text_msg(&mut self, msg_text: &str) -> Result<Option<JsonMessage>> {
         let msg_inner = serde_json::from_str(msg_text)?;
         match msg_inner {
-            JsonMessage::OpenTunnel {  } => {
+            JsonMessage::OpenTunnel { protocol_version } => {
+                // Check that the protocol version is compatible
+                if protocol_version != crate::protocol::PROTOCOL_VERSION {
+                    log::error!("Incompatible protocol version. Expected {}, got {}.", crate::protocol::PROTOCOL_VERSION, protocol_version);
+                    return Err(anyhow!("Incompatible protocol version. Expected {}, got {}.", crate::protocol::PROTOCOL_VERSION, protocol_version))
+                }
+
                 // Send the list of allowed targets to the server
                 let json_msg = JsonMessage::OpenTunnelSuccess {
                     exposed: self.allowed_targets.clone(),
