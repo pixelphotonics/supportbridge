@@ -16,7 +16,7 @@ enum Command {
     /// Run the central (public) server
     Serve {
         /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
-        #[clap(long, default_value = "[::]:8081")]
+        #[clap(long, default_value = "[::]:8091")]
         bind: String,
 
         /// Don't overwrite existing channels when a new exposer connection is made with the same name.
@@ -46,7 +46,7 @@ enum Command {
     /// Run the websocket-to-TCP bridge
     Expose {
         /// The Ip address:port combination to listen on. If only a port number is given, the server will listen on [::], which will listen to all interfaces (Ipv4 and Ipv6) by default on Linux.
-        #[clap(long, default_value = "[::]:8082")]
+        #[clap(long, default_value = "[::]:8092")]
         bind: String,
 
         /// The address of the TCP server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
@@ -69,10 +69,10 @@ enum Command {
         exposed_addr: String,
 
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
-        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
+        /// Can also be a websocket URL, such as ws://localhost:8091 or wss://example.com.
         /// If no URL schema is included, ws:// is assumed.
         ///
-        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
+        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8091.
         /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server: String,
 
@@ -83,10 +83,10 @@ enum Command {
     /// List all open tunnels on the central server
     List {
         /// The address of the central server to connect to. Can be a hostname or IP address. A port can be specified with a colon.
-        /// Can also be a websocket URL, such as ws://localhost:8081 or wss://example.com.
+        /// Can also be a websocket URL, such as ws://localhost:8091 or wss://example.com.
         /// If no URL schema is included, ws:// is assumed.
         ///
-        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8081.
+        /// When using a URL, a username and password can be included in the URL, such as ws://user:pass@localhost:8091.
         /// For security reasons, it is recommended to use a secure connection (wss://) and a password.
         server_addr: String,
 

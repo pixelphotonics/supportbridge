@@ -1,5 +1,5 @@
 [Unit]
-Description=Start the supportbridge server application and listen to incoming connections on port 8081
+Description=Start the supportbridge server application and listen to incoming connections on port 8091
 After=multi-user.target network.target
  
 [Service]
@@ -7,7 +7,7 @@ Type=simple
 Environment="RUST_LOG=info"
 Restart=on-failure
 RestartSec=3s
-ExecStart=/usr/bin/supportbridge serve --bind [::]:8081
+ExecStart=/usr/bin/supportbridge serve --bind [::]:8091
  
 [Install]
 WantedBy=multi-user.target
