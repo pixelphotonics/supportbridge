@@ -83,6 +83,7 @@ where  WS: Sink<Message, Error = WsError>
     
     async fn handle_text_msg(&mut self, msg_text: &str) -> Result<Option<JsonMessage>> {
         let msg_inner = serde_json::from_str(msg_text)?;
+        log::trace!("json msg received: {:?}", msg_inner);
         match msg_inner {
             JsonMessage::OpenTunnel { protocol_version } => {
                 // Check that the protocol version is compatible

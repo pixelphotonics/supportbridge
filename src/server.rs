@@ -189,6 +189,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
         match msg {
             Ok(Message::Text(msg_text)) => {
                 let msg_inner = serde_json::from_str(msg_text.as_str())?;
+                log::trace!("json msg received: {:?}", msg_inner);
                 match msg_inner {
                     JsonMessage::OpenTunnelSuccess { exposed } => {
                         log::info!("Exposer opened tunnel for ports: {:?}", exposed);
