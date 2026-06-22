@@ -415,6 +415,7 @@ pub async fn serve(options: ServerOptions) -> Result<()> {
     // run our app with hyper, listening globally on port 3000
     let listener = TcpListener::bind(&options.listen_addr).await?;
     info!("Listening on {}", options.listen_addr);
+    info!("Visit {}/list for a list of open tunnels.", options.listen_addr);
     axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
 
     Ok(())
