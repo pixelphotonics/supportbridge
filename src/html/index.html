@@ -72,7 +72,13 @@
 
         async function fetchTunnelInfo() {
             try {
-                const response = await fetch(window.location.href + '/list');
+                let href = window.location.href;
+                if (!href.endsWith("/")) {
+                    href = href + "/";
+                }
+                href = href + "list";
+
+                const response = await fetch(href);
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
