@@ -72,7 +72,7 @@
 
         async function fetchTunnelInfo() {
             try {
-                const response = await fetch('/list');
+                const response = await fetch(window.location.href + '/list');
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
