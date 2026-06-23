@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            apt: libssl-dev pkg-config
+            archive: tar.gz
+          - target: armv7-unknown-linux-gnueabihf
+            apt: gcc-arm-linux-gnueabihf
+            linker: arm-linux-gnueabihf-gcc
+            features: --no-default-features --features rustls-tls-native-roots,tabwriter
+            archive: tar.gz
+          - target: x86_64-pc-windows-gnu
+            apt: gcc-mingw-w64-x86-64
+            linker: x86_64-w64-mingw32-gcc
+            features: --no-default-features --features rustls-tls-native-roots,tabwriter
+            archive: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        run: sudo apt-get update -q && sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Build
+        env:
+          CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER: ${{ matrix.linker }}
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: ${{ matrix.linker }}
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          ARCHIVE="supportbridge-${{ github.ref_name }}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "target/${{ matrix.target }}/release" supportbridge
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Archive (zip)
+        if: matrix.archive == 'zip'
+        run: |
+          ARCHIVE="supportbridge-${{ github.ref_name }}-${{ matrix.target }}.zip"
+          zip -j "$ARCHIVE" "target/${{ matrix.target }}/release/supportbridge.exe"
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ARCHIVE }}
+          generate_release_notes: true
