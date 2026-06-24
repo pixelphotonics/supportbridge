@@ -1,8 +1,8 @@
 use anyhow::Result;
 use futures::{stream::Stream, Sink, SinkExt, StreamExt};
-use protocol::{BinaryMessage, ChannelId, ServerPath};
+use protocol::{ChannelId, ServerPath};
 use std::{error::Error, sync::Arc};
-use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::io::{AsyncRead};
 use std::{marker::{Send, Unpin}, ops::DerefMut};
 use tungstenite::Message;
 use util::{spawn_guarded, GuardedJoinHandle};
@@ -12,7 +12,7 @@ pub mod expose;
 pub mod protocol;
 pub mod server;
 pub mod util;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 pub type WsError = tungstenite::error::Error;
 pub type WsResult = std::result::Result<Message, WsError>;
@@ -23,7 +23,7 @@ pub type WsResult = std::result::Result<Message, WsError>;
 pub fn tcp_to_ws_encoded<TRx, WTx, M, E>(
     channel_id: ChannelId,
     mut rx_tcp: TRx,
-    mut tx_ws: Arc<tokio::sync::Mutex<WTx>>,
+    tx_ws: Arc<tokio::sync::Mutex<WTx>>,
 ) -> GuardedJoinHandle<Result<()>>
 where
     TRx: AsyncRead + Unpin  + Send + 'static,
@@ -46,11 +46,15 @@ where
             let msg = M::from(buf);
 
             log::debug!("TCP->WS: {} bytes", n);
-            tx_ws
+            let res = tx_ws
                 .lock()
                 .await
                 .send(msg)
                 .await;
+
+            if let Err(e) = res {
+                log::error!("Error sending message to websocket: {}", e);
+            }
         }
 
         Ok(())
