@@ -41,9 +41,9 @@ pub fn build_request(
 
     let base_path = parsed_url.path().to_string();
     let path_and_query = if base_path.ends_with('/') {
-        format!("{}{}", base_path, command.to_string())
+        format!("{}{}", base_path, command)
     } else {
-        format!("{}/{}", base_path, command.to_string())
+        format!("{}/{}", base_path, command)
     };
 
     log::info!(
@@ -77,7 +77,7 @@ pub fn build_request(
         );
 
     // use username / password info if available
-    let req = if parsed_url.username().len() > 0 || parsed_url.password().is_some() {
+    let req = if !parsed_url.username().is_empty() || parsed_url.password().is_some() {
         use base64::prelude::*;
         let auth = format!(
             "{}:{}",
@@ -116,6 +116,10 @@ impl<T> GuardedJoinHandle<T> {
     pub fn abort_handle(&self) -> tokio::task::AbortHandle {
         self.0.abort_handle()
     }
+
+    pub fn guarded_abort_handle(&self) -> GuardedAbortHandle {
+        GuardedAbortHandle(self.0.abort_handle())
+    }
 }
 
 impl<T> Future for GuardedJoinHandle<T> {
@@ -131,6 +135,31 @@ impl<T> Drop for GuardedJoinHandle<T> {
         self.0.abort();
     }
 }
+
+
+/// A guarded AbortHandle that cancels the task on drop.
+pub struct GuardedAbortHandle(tokio::task::AbortHandle);
+
+impl GuardedAbortHandle {
+    pub fn abort(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl Drop for GuardedAbortHandle {
+    fn drop(&mut self) {
+        log::trace!("Dropping GuardedAbortHandle");
+        self.0.abort();
+    }
+}
+
+
+/// Returns the current time as ISO-formatted string
+pub fn now() -> String {
+    chrono::Utc::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
 
 #[cfg(test)]
 mod tests {

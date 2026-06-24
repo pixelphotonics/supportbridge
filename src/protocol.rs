@@ -2,6 +2,13 @@
 //! 
 //! The protocol is kept very simple and relies on websockets for communication.
 //! 
+//! The exchange between exposer, server and client is done using small JSON messages. The
+//! message types are encoded in the `JsonMessage` enum and the type is tagged with the `type`
+//! field. The messages are serialized using `serde_json` and sent as text messages over the
+//! websocket connection.
+//!  
+//! 
+//! 
 //! The communication with the server is done via HTTP GET requests with the following paths:
 //!     
 //!  - `/register?name=<name>`: Register a new exposer with the given name
@@ -35,25 +42,167 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use tungstenite::http::Uri;
 
+pub type ChannelId = u8;
+pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Message sent between client and exposer.
+/// As a websocket message, this is just the channel id (single byte) followed by the data.
+pub struct BinaryMessage<'a> {
+    pub channel_id: ChannelId,
+    pub data: &'a [u8],
+}
+
+impl<'a> BinaryMessage<'a> {
+    pub fn from_ws(in_data: &'a [u8]) -> Option<Self> {
+        if in_data.len() > 1 {
+            Some (Self {
+                channel_id: in_data[0],
+                data: &in_data[1..]
+            })
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExposedAddress {
+    pub address: String,
+    pub port: u16,
+}
+
+impl TryFrom<String> for ExposedAddress {
+    type Error = &'static str;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        // Special case: if it's an IPv6 address like "[::1]:80"
+        let (host, port_str) = if value.starts_with('[') {
+            // IPv6 should be in form "[addr]:port"
+            let closing = value.find(']').ok_or("Invalid IPv6 format, missing ']'")?;
+            let host = &value[1..closing];
+            let rest = &value[(closing + 1)..];
+            if !rest.starts_with(':') {
+                return Err("Invalid IPv6 format, missing ':' after ']'");
+            }
+            (host, &rest[1..])
+        } else {
+            // Normal hostname or IPv4, split on the last colon
+            match value.rsplit_once(':') {
+                Some((host, port)) => (host, port),
+                None => return Err("Missing port separator ':'"),
+            }
+        };
+    
+        let port: u16 = port_str.parse().map_err(|_| "Invalid port number")?;
+    
+        Ok(Self {
+            address: host.to_string(),
+            port,
+        })
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ClientInfo {
-    pub peer_addr: String,
-    pub uses_port: bool,
+#[serde(tag = "type")]
+pub enum JsonMessage {
+    /// Initiate a new tunnel connection. This is sent from the server to the exposer
+    /// once in the beginning.
+    /// The exposer will respond either with `OpenTunnelSuccess` or `Error`.
+    OpenTunnel {
+        protocol_version: u32,
+    },
+
+    /// A new tunnel was opened. This is sent from the exposer to the server.
+    OpenTunnelSuccess {
+        exposed: Vec<ExposedAddress>,
+    },
+
+    /// Open a new channel. Sent from server to exposer.
+    OpenChannel {
+        /// The channel id as assigned by the server.
+        channel_id: ChannelId,
+
+        /// The port on the exposer to connect to.
+        exposed_address: ExposedAddress,
+    },
+
+    /// This message is sent when a channel is closed. This can be sent by the exposer or the server.
+    CloseChannel {
+        /// The channel id to close.
+        channel_id: ChannelId,
+
+        /// The reason for closing the channel.
+        error: Option<String>,
+    },
+
+    /// A new channel was initialized and the given id was assigned.
+    OpenChannelSuccessful {
+        channel_id: ChannelId,
+    },
+
+    /// Channel Error
+    Error {
+        message: String,
+    },
+}
+
+impl From<JsonMessage> for tungstenite::Message {
+    fn from(message: JsonMessage) -> tungstenite::Message {
+        tungstenite::Message::Text(serde_json::to_string(&message).unwrap().into())
+    }
+}
+
+impl From<JsonMessage> for axum::extract::ws::Message {
+    fn from(message: JsonMessage) -> axum::extract::ws::Message {
+        axum::extract::ws::Message::Text(serde_json::to_string(&message).unwrap().into())
+    }
+}
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExposedServerPort {
+    /// The open port on the server
+    pub port: u16,
+
+    /// The address / port from the POV of the exposer which this port maps to
+    pub exposed_addr: ExposedAddress,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExposerInfo {
+pub struct TunnelInfo {
+    /// Name of the exposer machine (typically the hostname)
     pub name: String,
 
-    /// Time when the channel was opened
+    /// Time when the tunnel was opened
     pub open_time: String,
+
+    /// The address of the exposer
     pub peer_addr: String,
-    pub open_port: Option<u16>,
+
+    /// Ports on the server
+    pub ports: Vec<ExposedServerPort>,
 
     /// The name of the connected client
-    pub connected_client: Option<ClientInfo>,
+    pub channels: Vec<ChannelInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelInfo {
+
+    pub id: ChannelId,
+
+    /// The exposed port on the exposer
+    pub exposed: ExposedAddress,
+
+    /// The client address that is currently connected to this channel
+    pub peer_addr: String,
+
+    /// The time when the channel was opened
+    pub open_time: String,
+}
+
+#[derive(Debug)]
 pub enum ServerPath {
     Register { name: String },
     Connect { name: String },
@@ -115,5 +264,59 @@ impl std::fmt::Display for ServerPath {
                 write!(f, "list")
             },
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_exposed_address_try_from_valid_ipv4() {
+        let input = "127.0.0.1:8080".to_string();
+        let result = ExposedAddress::try_from(input).unwrap();
+        assert_eq!(result.address, "127.0.0.1");
+        assert_eq!(result.port, 8080);
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_valid_ipv6() {
+        let input = "[::1]:8080".to_string();
+        let result = ExposedAddress::try_from(input).unwrap();
+        assert_eq!(result.address, "::1");
+        assert_eq!(result.port, 8080);
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_missing_port() {
+        let input = "127.0.0.1".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Missing port separator ':'");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_invalid_port() {
+        let input = "127.0.0.1:abc".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid port number");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_invalid_ipv6_format() {
+        let input = "[::1".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid IPv6 format, missing ']'");
+    }
+
+    #[test]
+    fn test_exposed_address_try_from_ipv6_missing_colon() {
+        let input = "[::1]8080".to_string();
+        let result = ExposedAddress::try_from(input);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid IPv6 format, missing ':' after ']'");
     }
 }
