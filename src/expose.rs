@@ -41,7 +41,7 @@ where  WS: Sink<Message, Error = WsError>
 {
     async fn open_channel(&mut self, channel_id: ChannelId, exposed_address: ExposedAddress) -> Result<()> {
         // Lookup in the whitelist
-        if !self.allowed_targets.iter().any(|allowed| *allowed == exposed_address) {
+        if !self.allowed_targets.contains(&exposed_address) {
             return Err(anyhow!("Address / port not allowed."));
         }
 

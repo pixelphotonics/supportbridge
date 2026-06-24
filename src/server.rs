@@ -34,7 +34,10 @@ pub struct ServerOptions {
 
 pub struct Tunnel {
     uid: usize,
-    task: GuardedAbortHandle,
+
+    /// This is stored in the struct for the purpose of aborting it when the tunnel is closed (RAII).
+    _task: GuardedAbortHandle,
+    
     state: Arc<Mutex<TunnelState>>,
 }
 
@@ -53,7 +56,10 @@ pub struct TunnelState {
 struct ExposedPort {
     exposed_addr: ExposedAddress,
     server_port: u16,
-    listen_task: GuardedJoinHandle<Result<()>>,
+
+    /// The task that listens for incoming TCP connections on the server port and creates channels for them.
+    /// This is stored in the struct for the purpose of aborting it when the tunnel is closed (RAII).
+    _listen_task: GuardedJoinHandle<Result<()>>,
 }
 
 struct Channel {
@@ -206,7 +212,7 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
 
                             tunnel_lock.ports.push(ExposedPort {
                                 exposed_addr,
-                                listen_task,
+                                _listen_task: listen_task,
                                 server_port: port,
                             });
                         }
@@ -308,7 +314,7 @@ async fn open_tunnel(
     
     server_state.tunnels.insert(name.clone(), Tunnel {
         uid: new_tunnel_id,
-        task: task.guarded_abort_handle(),
+        _task: task.guarded_abort_handle(),
         state: tunnel_state.clone(),
     });
 
