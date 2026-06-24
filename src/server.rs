@@ -27,8 +27,6 @@ pub struct TunnelServer {
 pub struct ServerOptions {
     pub listen_addr: core::net::SocketAddr,
     pub port_range: RangeInclusive<u16>,
-    pub overwrite_existing_connection: bool,
-    pub overwrite_existing_exposer: bool,
     pub root_file: Option<PathBuf>,
 }
 
@@ -253,7 +251,8 @@ async fn serve_tunnel(mut ws_in: WsReceiver, tunnel: Weak<Mutex<TunnelState>>, o
                             channel.send_task.abort();
                         }
                     } else {
-                        return Err(anyhow!("Unknown channel id: {}", msg.channel_id));
+                        log::warn!("Unknown channel id: {}", msg.channel_id);
+                        continue;
                     }
                 } else {
                     log::warn!("Invalid binary message");
@@ -289,7 +288,7 @@ async fn open_tunnel(
 
     if let Some(tunnel) = server_state.tunnels.remove(&name) {
         let tunnel_state = tunnel.state.lock().await;
-        println!(
+        log::info!(
             "Dropping existing tunnel: {}, {}",
             tunnel_state.name, tunnel_state.peer_addr
         );

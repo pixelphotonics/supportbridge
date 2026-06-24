@@ -19,17 +19,6 @@ enum Command {
         #[clap(long, default_value = "[::]:8091")]
         bind: String,
 
-        /// Don't overwrite existing channels when a new exposer connection is made with the same name.
-        /// By default, the server will close the existing connection to the exposer and allow the new exposer to take its place.
-        #[arg(short = 'e', long)]
-        dont_overwrite_exposer: bool,
-
-        /// Don't overwrite existing connection to channels when a new exposer connection is made.
-        ///
-        /// By default, the server will close the existing connection to the channel and allow the new client to connect to the exposer.
-        #[arg(short = 'c', long)]
-        dont_overwrite_connection: bool,
-
         /// The minimum port number to use when opening ports on the server.
         #[arg(long, default_value = "11000")]
         min_port: u16,
@@ -90,8 +79,6 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Serve {
             bind,
-            dont_overwrite_exposer,
-            dont_overwrite_connection,
             min_port,
             max_port,
             html,
@@ -101,8 +88,6 @@ async fn main() -> anyhow::Result<()> {
             let server_options = server::ServerOptions {
                 listen_addr: parse_bind_address(&bind)?,
                 port_range: min_port..=max_port,
-                overwrite_existing_connection: !dont_overwrite_connection,
-                overwrite_existing_exposer: !dont_overwrite_exposer,
                 root_file: html,
             };
 
