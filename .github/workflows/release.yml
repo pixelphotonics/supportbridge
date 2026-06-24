@@ -22,12 +22,12 @@ jobs:
           - target: armv7-unknown-linux-gnueabihf
             apt: gcc-arm-linux-gnueabihf
             linker: arm-linux-gnueabihf-gcc
-            features: --no-default-features --features rustls-tls-native-roots,tabwriter
+            features: --no-default-features --features rustls-tls-native-roots
             archive: tar.gz
           - target: x86_64-pc-windows-gnu
             apt: gcc-mingw-w64-x86-64
             linker: x86_64-w64-mingw32-gcc
-            features: --no-default-features --features rustls-tls-native-roots,tabwriter
+            features: --no-default-features --features rustls-tls-native-roots
             archive: zip
 
     steps:
