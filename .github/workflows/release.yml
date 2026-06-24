@@ -101,3 +101,13 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Add Docker image to release notes
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          body: |
+            ## Docker
+            ```
+            docker pull ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+            ```
